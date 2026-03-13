@@ -393,7 +393,7 @@ def check_model_exists(model: str) -> bool:
     return False
 
 
-def generate_launch_script(recipe: dict[str, Any], overrides: dict[str, Any], is_solo: bool = False, extra_args: list[str] | None = None) -> str:
+def generate_launch_script(recipe: dict[str, Any], overrides: dict[str, Any], is_solo: bool = False, extra_args: list[str] | None = None, no_ray: bool = False) -> str:
     """
     Generate a bash launch script from the recipe.
     
@@ -458,9 +458,9 @@ def generate_launch_script(recipe: dict[str, Any], overrides: dict[str, Any], is
         print(f"Available parameters: {list(params.keys())}")
         sys.exit(1)
     
-    # In solo mode, remove --distributed-executor-backend ray
-    # (it's not needed and can cause issues on single node)
-    if is_solo:
+    # In solo or no-ray mode, remove --distributed-executor-backend
+    # (not needed for solo; no-ray uses PyTorch distributed instead)
+    if is_solo or no_ray:
         import re
         # Remove the entire line containing --distributed-executor-backend
         # This handles multi-line commands with backslash continuations
@@ -820,6 +820,12 @@ Examples:
     launch_group.add_argument("-t", "--container", dest="container_override", help="Override container image from recipe")
     launch_group.add_argument("--nccl-debug", choices=["VERSION", "WARN", "INFO", "TRACE"], help="NCCL debug level")
     launch_group.add_argument("-e", "--env", action="append", dest="env_vars", default=[], metavar="VAR=VALUE", help="Environment variable to pass to container (e.g. -e HF_TOKEN=xxx). Can be used multiple times.")
+    launch_group.add_argument(
+        "--no-ray",
+        action="store_true",
+        dest="no_ray",
+        help="No-Ray mode: run multi-node vLLM without Ray (uses PyTorch distributed backend)"
+    )
     
     # Cluster discovery options
     discover_group = parser.add_argument_group("Cluster discovery")
@@ -933,6 +939,10 @@ Examples:
     solo_only = recipe.get("solo_only", False)
     is_solo = args.solo or not is_cluster
     
+    if getattr(args, 'no_ray', False) and is_solo:
+        print("Error: --no-ray is incompatible with --solo. Solo mode already runs without Ray.")
+        return 1
+
     if cluster_only and is_solo:
         print(f"Error: Recipe '{recipe['name']}' requires cluster mode.")
         print(f"This model is too large to run on a single node.")
@@ -1097,7 +1107,7 @@ Examples:
                     print(f"         vLLM uses last value; extra args appear after template substitution")
     
     # Generate launch script
-    script_content = generate_launch_script(recipe, overrides, is_solo=is_solo, extra_args=extra_args)
+    script_content = generate_launch_script(recipe, overrides, is_solo=is_solo, extra_args=extra_args, no_ray=getattr(args, 'no_ray', False))
     
     if args.dry_run:
         print("=== Generated Launch Script ===")
@@ -1116,6 +1126,8 @@ Examples:
             cmd_parts.append("--solo")
         if args.daemon:
             cmd_parts.append("-d")
+        if getattr(args, 'no_ray', False):
+            cmd_parts.append("--no-ray")
         if nodes:
             cmd_parts.extend(["-n", ",".join(nodes)])
         if args.nccl_debug:
@@ -1155,7 +1167,10 @@ Examples:
         
         if args.daemon:
             cmd.append("-d")
-        
+
+        if getattr(args, 'no_ray', False):
+            cmd.append("--no-ray")
+
         # Pass nodes to launch-cluster.sh (from command line, .env, or autodiscover)
         if nodes:
             cmd.extend(["-n", ",".join(nodes)])
