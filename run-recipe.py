@@ -470,17 +470,16 @@ def generate_launch_script(recipe: dict[str, Any], overrides: dict[str, Any], is
             if '--distributed-executor-backend' not in line
         ]
         command = '\n'.join(filtered_lines)
+
+    # Remove trailing backslash if present
+    if command.endswith('\\\n'):
+        command = command.rstrip('\\\n').rstrip()
     
     # Append extra args if provided (after --)
     if extra_args:
         # Join extra args and append to command
         extra_args_str = ' '.join(shlex.quote(a) for a in extra_args)
-        command = command.rstrip()
-        # Handle multi-line commands with backslash continuations
-        if command.endswith('\\'):
-            command = command.rstrip('\\').rstrip() + ' \\\n    ' + extra_args_str
-        else:
-            command = command + ' ' + extra_args_str
+        command = command + ' ' + extra_args_str
     
     lines.append("# Run the model")
     lines.append(command.strip())
