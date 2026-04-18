@@ -221,15 +221,15 @@ RUN curl -fsL https://patch-diff.githubusercontent.com/raw/vllm-project/vllm/pul
        fi \
     && rm pr35568.diff
 
-# TEMPORARY PATCH for broken compilation - https://github.com/vllm-project/vllm/pull/38919
-RUN curl -fsL https://patch-diff.githubusercontent.com/raw/vllm-project/vllm/pull/38919.diff -o pr38919.diff \
-    && if git apply --reverse --check pr38919.diff 2>/dev/null; then \
-         echo "PR 38919 already applied, skipping."; \
+# TEMPORARY PATCH to re-enable Flashinfer 0.6.8 - https://github.com/vllm-project/vllm/pull/39959
+RUN curl -fsL https://patch-diff.githubusercontent.com/raw/vllm-project/vllm/pull/39959.diff -o pr39959.diff \
+    && if git apply --reverse --check pr39959.diff 2>/dev/null; then \
+         echo "PR 39959 already applied, skipping."; \
        else \
-         echo "Applying PR 38919..."; \
-         git apply -v pr38919.diff; \
+         echo "Applying PR 39959..."; \
+         git apply -v pr39959.diff; \
        fi \
-    && rm pr38919.diff
+    && rm pr39959.diff
 
 # Prepare build requirements
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
@@ -341,7 +341,7 @@ ENV PATH=$VLLM_BASE_DIR:$PATH
 
 # Final extra deps
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    uv pip install ray[default] fastsafetensors
+    uv pip install ray[default] fastsafetensors instanttensor
 
 # Fix NCCL
 RUN rm /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 && \
