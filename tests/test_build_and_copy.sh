@@ -327,7 +327,7 @@ test_vllm_ref_skips_preset_prs_by_default() {
     run_build --vllm-ref ab666069935c1f23e8ef56038b4659ac9e8f19f8 || fail "--vllm-ref run failed"
     assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=ab666069935c1f23e8ef56038b4659ac9e8f19f8 .*--build-arg VLLM_APPLY_PRESET_PRS=0'
     assert_log_not_contains 'VLLM_APPLY_PRESET_PRS=1'
-    assert_output_contains 'Skipping preset vLLM PRs because --vllm-ref or --apply-vllm-pr was specified\.'
+    assert_output_contains 'Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified\.'
     pass "--vllm-ref forwards preset PR opt-out by default"
 }
 
@@ -343,7 +343,7 @@ test_apply_vllm_pr_skips_preset_prs_by_default() {
     setup_fixture
     run_build --apply-vllm-pr 12345 || fail "--apply-vllm-pr run failed"
     assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=main .*--build-arg VLLM_APPLY_PRESET_PRS=0 .*--build-arg VLLM_PRS=12345'
-    assert_output_contains 'Skipping preset vLLM PRs because --vllm-ref or --apply-vllm-pr was specified\.'
+    assert_output_contains 'Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified\.'
     pass "--apply-vllm-pr suppresses preset PRs by default"
 }
 
@@ -379,6 +379,53 @@ test_requested_vllm_prs_apply_to_selected_vllm_ref() {
     assert_output_contains 'Rebuilding vLLM wheels \(applying vLLM PRs to --vllm-ref ab666069935c1f23e8ef56038b4659ac9e8f19f8\)\.\.\.'
     assert_output_contains 'Applying vLLM PRs: 12345'
     pass "--apply-vllm-pr applies requested PRs to selected ref"
+}
+
+test_custom_vllm_repo_forces_source_build() {
+    setup_fixture
+    run_build --vllm-repo https://github.com/local-inference-lab/vllm.git || fail "--vllm-repo run failed"
+    assert_log_not_contains '^docker pull eugr/spark-vllm:latest$'
+    assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=main --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm.git --build-arg VLLM_APPLY_PRESET_PRS=0'
+    assert_output_contains 'Rebuilding vLLM wheels \(--vllm-repo specified\)\.\.\.'
+    assert_output_contains 'Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified\.'
+    pass "--vllm-repo forces a source build and suppresses upstream preset PRs"
+}
+
+test_custom_torch_versions_are_forwarded() {
+    setup_fixture
+    run_build \
+        --vllm-repo https://github.com/local-inference-lab/vllm.git \
+        --vllm-ref dev/fathomless-firmament \
+        --torch-version 2.12.0 \
+        --torchvision-version 0.27.0 \
+        --torchaudio-version none || fail "custom Torch version run failed"
+    assert_log_contains '^docker build --target vllm-export .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg VLLM_REF=dev/fathomless-firmament --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm.git'
+    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none '
+    pass "Torch package versions are forwarded to source and runner builds"
+}
+
+test_dockerfile_custom_repo_bypasses_shared_cache() {
+    for expected in \
+        'Custom vLLM repository selected; bypassing shared checkout cache.' \
+        'git clone --recursive "$VLLM_REPO" /tmp/vllm-custom' \
+        'cp -a /tmp/vllm-custom "$VLLM_BASE_DIR/vllm"'; do
+        if ! grep -Fq "$expected" "$PROJECT_DIR/Dockerfile"; then
+            fail "Dockerfile custom repository block is missing: $expected"
+        fi
+    done
+    pass "custom vLLM repositories bypass the shared upstream checkout cache"
+}
+
+test_dockerfile_uses_configurable_torch_versions() {
+    if [ "$(grep -Fc 'set -- "torch==$TORCH_VERSION" "$TORCHVISION_SPEC"' "$PROJECT_DIR/Dockerfile")" -ne 2 ] || \
+       [ "$(grep -Fc 'uv pip install "$@" triton' "$PROJECT_DIR/Dockerfile")" -ne 2 ]; then
+        fail "Dockerfile does not use configurable Torch package specs in both build and runner stages"
+    fi
+    if [ "$(grep -Fc 'echo "torchvision==${PINNED_TORCHVISION}"' "$PROJECT_DIR/Dockerfile")" -ne 2 ] || \
+       [ "$(grep -Fc 'echo "torchaudio==${PINNED_TORCHAUDIO}"' "$PROJECT_DIR/Dockerfile")" -ne 2 ]; then
+        fail "Dockerfile does not preserve the selected Torch-family versions during later installs"
+    fi
+    pass "Dockerfile uses configurable Torch package versions in build and runner stages"
 }
 
 test_copied_vllm_git_index_is_refreshed_before_patch_apply() {
@@ -450,6 +497,21 @@ test_dockerfile_applies_flashinfer_prs_without_merging_branch_history() {
     pass "FlashInfer PRs apply as patches without merging branch history"
 }
 
+test_dockerfile_fetches_vllm_prs_from_upstream() {
+    local vllm_pr_block="$TMP_BASE/vllm-pr-block"
+
+    sed -n '/ARG VLLM_PRS=""/,/# TEMPORARY PATCH: vLLM PR/p' "$PROJECT_DIR/Dockerfile" > "$vllm_pr_block"
+    for expected in \
+        'git remote add vllm-upstream "$VLLM_UPSTREAM_REPO"' \
+        'git fetch vllm-upstream +pull/${pr}/head:pr-${pr}' \
+        'git merge-base vllm-upstream/main pr-${pr}'; do
+        if ! grep -Fq "$expected" "$vllm_pr_block"; then
+            fail "vLLM PR block does not use the dedicated upstream remote: $expected"
+        fi
+    done
+    pass "vLLM PR patches are fetched from upstream when building a fork"
+}
+
 test_default_uses_prebuilt
 test_tf5_uses_prebuilt_tf5_tag
 test_custom_tag_uses_prebuilt_custom_tag
@@ -475,7 +537,12 @@ test_apply_vllm_pr_can_apply_preset_prs_explicitly
 test_vllm_ref_can_apply_preset_prs_explicitly
 test_apply_preset_prs_forces_vllm_rebuild
 test_requested_vllm_prs_apply_to_selected_vllm_ref
+test_custom_vllm_repo_forces_source_build
+test_custom_torch_versions_are_forwarded
+test_dockerfile_custom_repo_bypasses_shared_cache
+test_dockerfile_uses_configurable_torch_versions
 test_copied_vllm_git_index_is_refreshed_before_patch_apply
 test_dockerfile_applies_flashinfer_prs_without_merging_branch_history
+test_dockerfile_fetches_vllm_prs_from_upstream
 
 echo "Passed $TESTS_PASSED build-and-copy tests."

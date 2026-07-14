@@ -4,11 +4,18 @@
 ARG BUILD_JOBS=16
 ARG CUDA_IMAGE=nvidia/cuda:13.0.2-devel-ubuntu24.04
 ARG NCCL_NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"
+ARG TORCH_VERSION=2.11.0
+ARG TORCHVISION_VERSION=""
+ARG TORCHAUDIO_VERSION=""
 
 # =========================================================
 # STAGE 1: Base Build Image
 # =========================================================
 FROM ${CUDA_IMAGE} AS base
+
+ARG TORCH_VERSION
+ARG TORCHVISION_VERSION
+ARG TORCHAUDIO_VERSION
 
 # Build parallemism
 ARG BUILD_JOBS
@@ -53,7 +60,17 @@ RUN apt update && \
 
 # Additional deps
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install torch==2.11.0 torchvision torchaudio triton --index-url https://download.pytorch.org/whl/cu130 && \
+     TORCHVISION_SPEC="torchvision" && \
+     TORCHAUDIO_SPEC="torchaudio" && \
+     if [ -n "$TORCHVISION_VERSION" ]; then TORCHVISION_SPEC="torchvision==$TORCHVISION_VERSION"; fi && \
+     if [ "$TORCHAUDIO_VERSION" = "none" ]; then \
+         TORCHAUDIO_SPEC=""; \
+     elif [ -n "$TORCHAUDIO_VERSION" ]; then \
+         TORCHAUDIO_SPEC="torchaudio==$TORCHAUDIO_VERSION"; \
+     fi && \
+     set -- "torch==$TORCH_VERSION" "$TORCHVISION_SPEC" && \
+     if [ -n "$TORCHAUDIO_SPEC" ]; then set -- "$@" "$TORCHAUDIO_SPEC"; fi && \
+     uv pip install "$@" triton --index-url https://download.pytorch.org/whl/cu130 && \
      uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2" filelock pynvml requests tqdm
 
 # Configure Ccache for CUDA/C++
@@ -251,6 +268,8 @@ WORKDIR $VLLM_BASE_DIR
 ARG CACHEBUST_VLLM=1
 
 # Git reference (branch, tag, or SHA) to checkout
+ARG VLLM_UPSTREAM_REPO=https://github.com/vllm-project/vllm.git
+ARG VLLM_REPO=https://github.com/vllm-project/vllm.git
 ARG VLLM_REF=main
 
 # DeepGEMM nv_dev includes SM120/SM121 MXFP4 support from PR #324.
@@ -258,29 +277,46 @@ ARG DEEPGEMM_REPO=https://github.com/deepseek-ai/DeepGEMM.git
 ARG DEEPGEMM_REF=nv_dev
 ENV DEEPGEMM_SRC_DIR=/workspace/DeepGEMM
 
-# Smart Git Clone (Fetch changes instead of full re-clone)
+# The upstream repository uses the shared checkout cache. Custom repositories
+# are cloned outside it so a fork can never reuse or mutate the upstream clone.
 RUN --mount=type=cache,id=repo-cache,target=/repo-cache \
-    echo "CACHEBUST_VLLM=${CACHEBUST_VLLM}" && \
-    cd /repo-cache && \
-    if [ ! -d "vllm" ]; then \
-        echo "Cache miss: Cloning vLLM from scratch..." && \
-        git clone --recursive https://github.com/vllm-project/vllm.git; \
-        if [ "$VLLM_REF" != "main" ]; then \
-            cd vllm && \
-            git checkout ${VLLM_REF}; \
+    set -eux; \
+    echo "CACHEBUST_VLLM=${CACHEBUST_VLLM}"; \
+    if [ "$VLLM_REPO" != "$VLLM_UPSTREAM_REPO" ]; then \
+        echo "Custom vLLM repository selected; bypassing shared checkout cache."; \
+        git clone --recursive "$VLLM_REPO" /tmp/vllm-custom; \
+        cd /tmp/vllm-custom; \
+        if git rev-parse --verify --quiet "refs/remotes/origin/$VLLM_REF"; then \
+            git checkout --detach "origin/$VLLM_REF"; \
+        else \
+            git checkout --detach "$VLLM_REF"; \
         fi; \
+        git submodule update --init --recursive; \
+        cp -a /tmp/vllm-custom "$VLLM_BASE_DIR/vllm"; \
     else \
-        echo "Cache hit: Fetching updates..." && \
-        cd vllm && \
-        git fetch origin && \
-        git fetch origin --tags --force && \
-        (git checkout --detach origin/${VLLM_REF} 2>/dev/null || git checkout ${VLLM_REF}) && \
-        git reset --hard HEAD && \
-        git submodule update --init --recursive && \
-        git clean -fdx && \
+        cd /repo-cache; \
+        if [ ! -d "vllm" ]; then \
+            echo "Cache miss: Cloning vLLM from scratch..."; \
+            git clone --recursive "$VLLM_REPO" vllm; \
+        else \
+            echo "Cache hit: Fetching updates..."; \
+            cd vllm; \
+            git fetch origin; \
+            git fetch origin --tags --force; \
+            cd ..; \
+        fi; \
+        cd vllm; \
+        if git rev-parse --verify --quiet "refs/remotes/origin/$VLLM_REF"; then \
+            git checkout --detach "origin/$VLLM_REF"; \
+        else \
+            git checkout --detach "$VLLM_REF"; \
+        fi; \
+        git reset --hard HEAD; \
+        git submodule update --init --recursive; \
+        git clean -fdx; \
         git gc --auto; \
-    fi && \
-    cp -a /repo-cache/vllm $VLLM_BASE_DIR/
+        cp -a /repo-cache/vllm "$VLLM_BASE_DIR/"; \
+    fi
 
 RUN --mount=type=cache,id=repo-cache,target=/repo-cache \
     set -eux; \
@@ -345,21 +381,23 @@ RUN set -eux; \
         git config --global user.name "Docker Builder"; \
         \
         echo "Applying PR patches to vLLM ref $VLLM_REF ($VLLM_REQUESTED_HEAD): $VLLM_ALL_PRS"; \
-        echo "Fetching origin/main only to calculate PR patch ranges; current checkout remains $VLLM_REF."; \
-        git fetch origin +refs/heads/main:refs/remotes/origin/main; \
+        echo "Fetching upstream main only to calculate PR patch ranges; current checkout remains $VLLM_REF."; \
+        git remote remove vllm-upstream >/dev/null 2>&1 || true; \
+        git remote add vllm-upstream "$VLLM_UPSTREAM_REPO"; \
+        git fetch vllm-upstream +refs/heads/main:refs/remotes/vllm-upstream/main; \
         for pr in $VLLM_ALL_PRS; do \
             echo "Fetching PR #$pr and applying its patch onto current HEAD..."; \
-            git fetch origin +pull/${pr}/head:pr-${pr}; \
-            pr_base="$(git merge-base origin/main pr-${pr} || true)"; \
+            git fetch vllm-upstream +pull/${pr}/head:pr-${pr}; \
+            pr_base="$(git merge-base vllm-upstream/main pr-${pr} || true)"; \
             if [ -z "$pr_base" ]; then \
-                echo "Unable to find an origin/main merge-base for PR #$pr."; \
+                echo "Unable to find an upstream main merge-base for PR #$pr."; \
                 exit 1; \
             fi; \
             patch_file="/tmp/pr-${pr}.patch"; \
             echo "PR #$pr patch range: $pr_base..pr-${pr}; apply target: $(git rev-parse HEAD)."; \
             git diff --binary "$pr_base" "pr-${pr}" > "$patch_file"; \
             if [ ! -s "$patch_file" ]; then \
-                echo "PR #$pr has no patch relative to origin/main; skipping."; \
+                echo "PR #$pr has no patch relative to upstream main; skipping."; \
                 rm -f "$patch_file"; \
                 continue; \
             fi; \
@@ -861,6 +899,10 @@ COPY --from=vllm-builder /workspace/wheels /
 # =========================================================
 FROM ${CUDA_IMAGE} AS runner
 
+ARG TORCH_VERSION
+ARG TORCHVISION_VERSION
+ARG TORCHAUDIO_VERSION
+
 # Transferring build settings from build image because of ptxas/jit compilation during vLLM startup
 # Build parallemism
 ARG BUILD_JOBS
@@ -908,7 +950,17 @@ ARG PRE_TRANSFORMERS=0
 
 # Install deps
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-     uv pip install torch==2.11.0 torchvision torchaudio triton --index-url https://download.pytorch.org/whl/cu130 && \
+     TORCHVISION_SPEC="torchvision" && \
+     TORCHAUDIO_SPEC="torchaudio" && \
+     if [ -n "$TORCHVISION_VERSION" ]; then TORCHVISION_SPEC="torchvision==$TORCHVISION_VERSION"; fi && \
+     if [ "$TORCHAUDIO_VERSION" = "none" ]; then \
+         TORCHAUDIO_SPEC=""; \
+     elif [ -n "$TORCHAUDIO_VERSION" ]; then \
+         TORCHAUDIO_SPEC="torchaudio==$TORCHAUDIO_VERSION"; \
+     fi && \
+     set -- "torch==$TORCH_VERSION" "$TORCHVISION_SPEC" && \
+     if [ -n "$TORCHAUDIO_SPEC" ]; then set -- "$@" "$TORCHAUDIO_SPEC"; fi && \
+     uv pip install "$@" triton --index-url https://download.pytorch.org/whl/cu130 && \
      uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2"
 
 # Install wheels from host ./wheels/ (bind-mounted from build context — no layer bloat)
@@ -918,7 +970,11 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 RUN --mount=type=bind,source=wheels,target=/workspace/wheels \
     --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     PINNED_TORCH=$(python3 -c "import torch; print(torch.__version__)") && \
+    PINNED_TORCHVISION=$(python3 -c "import importlib.metadata as m; print(m.version('torchvision'))") && \
+    PINNED_TORCHAUDIO=$(python3 -c "import importlib.metadata as m; print(m.version('torchaudio'))" 2>/dev/null || true) && \
     echo "torch==${PINNED_TORCH}" > /tmp/wheel-override.txt && \
+    echo "torchvision==${PINNED_TORCHVISION}" >> /tmp/wheel-override.txt && \
+    if [ -n "$PINNED_TORCHAUDIO" ]; then echo "torchaudio==${PINNED_TORCHAUDIO}" >> /tmp/wheel-override.txt; fi && \
     echo "fastapi[standard]>=0.115.0,<0.137.0" >> /tmp/wheel-override.txt && \
     if [ "$PRE_TRANSFORMERS" = "1" ]; then \
         echo "transformers>=5.0.0" >> /tmp/wheel-override.txt; \
@@ -940,7 +996,11 @@ ENV PATH=$VLLM_BASE_DIR:$PATH
 # a re-resolve that swaps the CUDA-built torch for PyPI's CPU wheel.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     PINNED_TORCH=$(python3 -c "import torch; print(torch.__version__)") && \
+    PINNED_TORCHVISION=$(python3 -c "import importlib.metadata as m; print(m.version('torchvision'))") && \
+    PINNED_TORCHAUDIO=$(python3 -c "import importlib.metadata as m; print(m.version('torchaudio'))" 2>/dev/null || true) && \
     echo "torch==${PINNED_TORCH}" > /tmp/torch-override.txt && \
+    echo "torchvision==${PINNED_TORCHVISION}" >> /tmp/torch-override.txt && \
+    if [ -n "$PINNED_TORCHAUDIO" ]; then echo "torchaudio==${PINNED_TORCHAUDIO}" >> /tmp/torch-override.txt; fi && \
     echo "fastapi[standard]>=0.115.0,<0.137.0" >> /tmp/torch-override.txt && \
     uv pip install ray[default] fastsafetensors instanttensor \
         --override /tmp/torch-override.txt
