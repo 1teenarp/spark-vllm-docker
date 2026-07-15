@@ -17,8 +17,15 @@ COPY_HOSTS=()
 COPY_TO_FLAG=false
 SSH_USER="$USER"
 NO_BUILD=false
+DEFAULT_VLLM_REPO="https://github.com/vllm-project/vllm.git"
+VLLM_REPO="$DEFAULT_VLLM_REPO"
+VLLM_REPO_SET=false
 VLLM_REF="main"
 VLLM_REF_SET=false
+FATHOMLESS_VLLM_REPO="https://github.com/local-inference-lab/vllm"
+FATHOMLESS_VLLM_REF="dev/fathomless-firmament"
+FATHOMLESS_B12X_VERSION="0.30.2"
+B12X_VERSION=""
 FLASHINFER_REF="main"
 FLASHINFER_REF_SET=false
 TMP_IMAGE=""
@@ -35,6 +42,13 @@ BUILD_JOBS_SET=false
 DEFAULT_GPU_ARCH_LIST="12.1a"
 GPU_ARCH_LIST="$DEFAULT_GPU_ARCH_LIST"
 GPU_ARCH_SET=false
+DEFAULT_TORCH_VERSION="2.11.0"
+TORCH_VERSION="$DEFAULT_TORCH_VERSION"
+TORCH_VERSION_SET=false
+TORCHVISION_VERSION=""
+TORCHVISION_VERSION_SET=false
+TORCHAUDIO_VERSION=""
+TORCHAUDIO_VERSION_SET=false
 NETWORK_ARG=""
 WHEELS_REPO="eugr/spark-vllm-docker"
 FLASHINFER_RELEASE_TAG="prebuilt-flashinfer-current"
@@ -63,6 +77,11 @@ generate_build_metadata() {
     local transformers_5="$6"
     local exp_mxfp4="$7"
     local vllm_prs="$8"
+    local vllm_repo="$9"
+    local torch_version="${10}"
+    local torchvision_version="${11}"
+    local torchaudio_version="${12}"
+    local b12x_version="${13}"
 
     local base_image
     base_image=$(grep -m1 '^FROM .* AS runner' "$dockerfile" | awk '{print $2}')
@@ -76,7 +95,12 @@ flashinfer_commit: ${flashinfer_commit:-unknown}
 gpu_arch: ${GPU_ARCH_LIST}
 base_image: ${base_image:-unknown}
 build_args:
+  vllm_repo: "${vllm_repo}"
   vllm_ref: ${vllm_ref}
+  torch_version: "${torch_version}"
+  torchvision_version: "${torchvision_version}"
+  torchaudio_version: "${torchaudio_version}"
+  b12x_version: "${b12x_version}"
   transformers_5: ${transformers_5}
   exp_mxfp4: ${exp_mxfp4}
   vllm_prs: "${vllm_prs}"
@@ -398,7 +422,11 @@ usage() {
     echo "  --force-flashinfer-download   : Force download of FlashInfer wheels (skip cached wheel checks)"
     echo "  --force-vllm-download         : Force download of vLLM wheels (skip cached wheel checks)"
     echo "  --force-download              : Force download of all prebuilt wheels (skip cached wheel checks)"
+    echo "  --vllm-repo <url>             : vLLM Git repository (default: '${DEFAULT_VLLM_REPO}'); custom repositories bypass the shared checkout cache"
     echo "  --vllm-ref <ref>              : vLLM commit SHA, branch or tag (default: 'main')"
+    echo "  --torch-version <version>     : PyTorch version for build and runner images (default: '${DEFAULT_TORCH_VERSION}')"
+    echo "  --torchvision-version <ver>   : Optional torchvision version (default: resolver-selected for the requested PyTorch version)"
+    echo "  --torchaudio-version <ver>    : Optional torchaudio version; use 'none' to omit it (default: resolver-selected)"
     echo "  --flashinfer-ref <ref>        : FlashInfer commit SHA, branch or tag (default: 'main')"
     echo "  -c, --copy-to <hosts>         : Host(s) to copy image to. Accepts comma or space-delimited lists; matching remote image IDs are skipped."
     echo "      --copy-to-host            : Alias for --copy-to (backwards compatibility)."
@@ -408,7 +436,7 @@ usage() {
     echo "  --tf5                         : Deprecated compatibility flag; tag defaults to 'vllm-node-tf5' (aliases: --pre-tf, --pre-transformers)"
     echo "  --exp-mxfp4, --experimental-mxfp4 : Build with experimental native MXFP4 support"
     echo "  --apply-vllm-pr <pr-num>      : Apply a specific PR patch to vLLM source. Can be specified multiple times."
-    echo "  --apply-preset-vllm-prs       : Apply preset vLLM PRs even with --vllm-ref or --apply-vllm-pr."
+    echo "  --apply-preset-vllm-prs       : Apply preset vLLM PRs even with --vllm-repo, --vllm-ref, or --apply-vllm-pr."
     echo "  --apply-flashinfer-pr <pr-num>: Apply a specific PR patch to FlashInfer source. Can be specified multiple times."
     echo "  --full-log                    : Enable full build logging (--progress=plain)"
     echo "  --no-build                    : Skip building, only copy image (requires --copy-to)"
@@ -435,7 +463,47 @@ while [[ "$#" -gt 0 ]]; do
             FORCE_FLASHINFER_DOWNLOAD=true
             FORCE_VLLM_DOWNLOAD=true
             ;;
+        --vllm-repo)
+            if [ -n "$2" ] && [[ "$2" != -* ]]; then
+                VLLM_REPO="$2"
+                VLLM_REPO_SET=true
+                shift
+            else
+                echo "Error: --vllm-repo requires a repository URL."
+                exit 1
+            fi
+            ;;
         --vllm-ref) VLLM_REF="$2"; VLLM_REF_SET=true; shift ;;
+        --torch-version)
+            if [ -n "$2" ] && [[ "$2" != -* ]]; then
+                TORCH_VERSION="$2"
+                TORCH_VERSION_SET=true
+                shift
+            else
+                echo "Error: --torch-version requires a version."
+                exit 1
+            fi
+            ;;
+        --torchvision-version)
+            if [ -n "$2" ] && [[ "$2" != -* ]]; then
+                TORCHVISION_VERSION="$2"
+                TORCHVISION_VERSION_SET=true
+                shift
+            else
+                echo "Error: --torchvision-version requires a version."
+                exit 1
+            fi
+            ;;
+        --torchaudio-version)
+            if [ -n "$2" ] && [[ "$2" != -* ]]; then
+                TORCHAUDIO_VERSION="$2"
+                TORCHAUDIO_VERSION_SET=true
+                shift
+            else
+                echo "Error: --torchaudio-version requires a version."
+                exit 1
+            fi
+            ;;
         --flashinfer-ref) FLASHINFER_REF="$2"; FLASHINFER_REF_SET=true; shift ;;
         -c|--copy-to|--copy-to-host|--copy-to-hosts)
             COPY_TO_FLAG=true
@@ -512,6 +580,24 @@ if [ "$PRE_TRANSFORMERS" = true ]; then
     echo "         No Transformers override will be applied; image tag remains $IMAGE_TAG."
 fi
 
+CUSTOM_VLLM_REPO=false
+if [ "$VLLM_REPO" != "$DEFAULT_VLLM_REPO" ]; then
+    CUSTOM_VLLM_REPO=true
+fi
+
+NORMALIZED_VLLM_REPO="${VLLM_REPO%/}"
+NORMALIZED_VLLM_REPO="${NORMALIZED_VLLM_REPO%.git}"
+if [ "$NORMALIZED_VLLM_REPO" = "$FATHOMLESS_VLLM_REPO" ] && \
+   [ "$VLLM_REF" = "$FATHOMLESS_VLLM_REF" ]; then
+    B12X_VERSION="$FATHOMLESS_B12X_VERSION"
+    TORCH_BASE_VERSION="${TORCH_VERSION%%+*}"
+    if [ "$(printf '%s\n' "2.12.0" "$TORCH_BASE_VERSION" | sort -V | head -n1)" != "2.12.0" ]; then
+        echo "Error: ${FATHOMLESS_VLLM_REF} requires --torch-version 2.12.0 or newer for B12X (got ${TORCH_VERSION})."
+        exit 1
+    fi
+    echo "Including B12X ${B12X_VERSION} for ${VLLM_REF}."
+fi
+
 # Source autodiscover.sh to load .env file
 source "$(dirname "$0")/autodiscover.sh"
 
@@ -562,7 +648,11 @@ if [ -n "$FLASHINFER_PRS" ]; then
 fi
 
 if [ "$EXP_MXFP4" = true ]; then
+    if [ "$VLLM_REPO_SET" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --vllm-repo"; exit 1; fi
     if [ "$VLLM_REF_SET" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --vllm-ref"; exit 1; fi
+    if [ "$TORCH_VERSION_SET" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --torch-version"; exit 1; fi
+    if [ "$TORCHVISION_VERSION_SET" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --torchvision-version"; exit 1; fi
+    if [ "$TORCHAUDIO_VERSION_SET" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --torchaudio-version"; exit 1; fi
     if [ "$FLASHINFER_REF_SET" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --flashinfer-ref"; exit 1; fi
     if [ "$PRE_TRANSFORMERS" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --tf5"; exit 1; fi
     if [ "$REBUILD_FLASHINFER" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --rebuild-flashinfer"; exit 1; fi
@@ -586,7 +676,11 @@ fi
 CUSTOM_BUILD_REQUESTED=false
 if [ "$EXP_MXFP4" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$GPU_ARCH_SET" = true ] && [ "$GPU_ARCH_LIST" != "$DEFAULT_GPU_ARCH_LIST" ]; then CUSTOM_BUILD_REQUESTED=true; fi
+if [ "$CUSTOM_VLLM_REPO" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$VLLM_REF_SET" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
+if [ "$TORCH_VERSION" != "$DEFAULT_TORCH_VERSION" ]; then CUSTOM_BUILD_REQUESTED=true; fi
+if [ "$TORCHVISION_VERSION_SET" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
+if [ "$TORCHAUDIO_VERSION_SET" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$FLASHINFER_REF_SET" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$REBUILD_FLASHINFER" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$REBUILD_VLLM" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
@@ -636,6 +730,11 @@ fi
 COMMON_BUILD_FLAGS+=("--build-arg" "BUILD_JOBS=$BUILD_JOBS")
 COMMON_BUILD_FLAGS+=("--build-arg" "TORCH_CUDA_ARCH_LIST=$GPU_ARCH_LIST")
 COMMON_BUILD_FLAGS+=("--build-arg" "FLASHINFER_CUDA_ARCH_LIST=$GPU_ARCH_LIST")
+if [ "$EXP_MXFP4" = false ]; then
+    COMMON_BUILD_FLAGS+=("--build-arg" "TORCH_VERSION=$TORCH_VERSION")
+    COMMON_BUILD_FLAGS+=("--build-arg" "TORCHVISION_VERSION=$TORCHVISION_VERSION")
+    COMMON_BUILD_FLAGS+=("--build-arg" "TORCHAUDIO_VERSION=$TORCHAUDIO_VERSION")
+fi
 NCCL_NVCC_GENCODE="$(gpu_arch_to_nccl_gencode "$GPU_ARCH_LIST")"
 COMMON_BUILD_FLAGS+=("--build-arg" "NCCL_NVCC_GENCODE=$NCCL_NVCC_GENCODE")
 if [ -n "$NETWORK_ARG" ]; then
@@ -675,9 +774,11 @@ if [ "$NO_BUILD" = false ]; then
 
         # Generate build metadata YAML for mxfp4 build
         MXFP4_VLLM_SHA=$(grep -m1 '^ARG VLLM_SHA=' Dockerfile.mxfp4 | cut -d= -f2)
+        MXFP4_VLLM_REPO=$(grep -m1 '^ARG VLLM_REPO=' Dockerfile.mxfp4 | cut -d= -f2-)
         MXFP4_FLASHINFER_SHA=$(grep -m1 '^ARG FLASHINFER_SHA=' Dockerfile.mxfp4 | cut -d= -f2)
         generate_build_metadata Dockerfile.mxfp4 "unknown" "$MXFP4_VLLM_SHA" "$MXFP4_FLASHINFER_SHA" \
-            "mxfp4-pinned" "false" "true" ""
+            "mxfp4-pinned" "false" "true" "" "$MXFP4_VLLM_REPO" "base-image" \
+            "base-image" "base-image" "disabled"
 
         CMD=("docker" "build" "-t" "$IMAGE_TAG" "${COMMON_BUILD_FLAGS[@]}" "-f" "Dockerfile.mxfp4" ".")
         echo "Building image with command: ${CMD[*]}"
@@ -757,7 +858,7 @@ if [ "$NO_BUILD" = false ]; then
         # ----------------------------------------------------------
         # Phase 2: vLLM wheels
         # ----------------------------------------------------------
-        if [ "$VLLM_REF_SET" = true ] || [ "$VLLM_PR_APPLICATION_REQUESTED" = true ]; then
+        if [ "$CUSTOM_VLLM_REPO" = true ] || [ "$VLLM_REF_SET" = true ] || [ "$VLLM_PR_APPLICATION_REQUESTED" = true ]; then
             REBUILD_VLLM=true
         fi
 
@@ -767,6 +868,8 @@ if [ "$NO_BUILD" = false ]; then
                 echo "Rebuilding vLLM wheels (applying vLLM PRs to --vllm-ref $VLLM_REF)..."
             elif [ "$VLLM_REF_SET" = true ]; then
                 echo "Rebuilding vLLM wheels (--vllm-ref specified)..."
+            elif [ "$CUSTOM_VLLM_REPO" = true ]; then
+                echo "Rebuilding vLLM wheels (--vllm-repo specified)..."
             elif [ -n "$VLLM_PRS" ]; then
                 echo "Rebuilding vLLM wheels (--apply-vllm-pr specified)..."
             elif [ "$APPLY_PRESET_VLLM_PRS" = true ]; then
@@ -797,13 +900,14 @@ if [ "$NO_BUILD" = false ]; then
                 "--target" "vllm-export"
                 "--output" "type=local,dest=./wheels"
                 "${COMMON_BUILD_FLAGS[@]}"
-                "--build-arg" "VLLM_REF=$VLLM_REF")
+                "--build-arg" "VLLM_REF=$VLLM_REF"
+                "--build-arg" "VLLM_REPO=$VLLM_REPO")
 
             if [ "$APPLY_PRESET_VLLM_PRS" = true ]; then
                 echo "Applying preset vLLM PRs from the Dockerfile (explicitly requested)."
                 VLLM_CMD+=("--build-arg" "VLLM_APPLY_PRESET_PRS=1")
-            elif [ "$VLLM_REF_SET" = true ] || [ -n "$VLLM_PRS" ]; then
-                echo "Skipping preset vLLM PRs because --vllm-ref or --apply-vllm-pr was specified."
+            elif [ "$CUSTOM_VLLM_REPO" = true ] || [ "$VLLM_REF_SET" = true ] || [ -n "$VLLM_PRS" ]; then
+                echo "Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified."
                 VLLM_CMD+=("--build-arg" "VLLM_APPLY_PRESET_PRS=0")
             else
                 echo "Applying preset vLLM PRs from the Dockerfile by default."
@@ -850,11 +954,17 @@ if [ "$NO_BUILD" = false ]; then
         FLASHINFER_COMMIT=""
         [ -f "./wheels/.flashinfer-commit" ] && FLASHINFER_COMMIT=$(cat ./wheels/.flashinfer-commit)
         generate_build_metadata Dockerfile "$VLLM_VERSION" "$VLLM_COMMIT" "$FLASHINFER_COMMIT" \
-            "$VLLM_REF" "true" "false" "$VLLM_PRS"
+            "$VLLM_REF" "true" "false" "$VLLM_PRS" "$VLLM_REPO" "$TORCH_VERSION" \
+            "${TORCHVISION_VERSION:-resolver-selected}" "${TORCHAUDIO_VERSION:-resolver-selected}" \
+            "${B12X_VERSION:-disabled}"
 
         RUNNER_CMD=("docker" "build"
             "-t" "$IMAGE_TAG"
             "${COMMON_BUILD_FLAGS[@]}")
+
+        if [ -n "$B12X_VERSION" ]; then
+            RUNNER_CMD+=("--build-arg" "B12X_VERSION=$B12X_VERSION")
+        fi
 
         RUNNER_CMD+=(".")
 

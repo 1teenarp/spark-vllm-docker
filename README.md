@@ -154,6 +154,8 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 `--torch-version`, `--torchvision-version`, and `--torchaudio-version` select the packages installed in both the source-build environment and final runner image. The torchvision and torchaudio versions remain resolver-selected when their flags are omitted; `--torchaudio-version none` omits torchaudio when a matching wheel is unavailable.
 
+The `local-inference-lab/vllm` `dev/fathomless-firmament` build also installs B12X 0.30.2 automatically. Only the B12X wheel is added: its shared dependencies come from vLLM so API-sensitive pins such as CUTLASS DSL are not upgraded out from under the selected vLLM revision. B12X kernels remain JIT-compiled at runtime; including this package does not add another CUDA compilation phase to the image build.
+
 ### 2026-07-10
 
 #### Optional earlyoom monitor
@@ -1312,6 +1314,8 @@ Using a different username:
 ```
 
 Custom vLLM repositories are cloned fresh instead of using the shared upstream checkout cache. Specifying a custom repository forces a vLLM source build. Upstream preset PRs are skipped by default for custom repositories and refs.
+
+For the exact `local-inference-lab/vllm` and `dev/fathomless-firmament` combination above, the runner also installs B12X 0.30.2 from PyPI automatically. The explicit version makes Docker cache behavior reproducible and changing it invalidates the package-install layer. The install preserves the dependency versions selected by vLLM, including its CUTLASS DSL pin. B12X requires PyTorch 2.12 or newer.
 
 **Copy existing image without rebuilding:**
 
