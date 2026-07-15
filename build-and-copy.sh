@@ -23,7 +23,6 @@ VLLM_REPO_SET=false
 VLLM_REF="main"
 VLLM_REF_SET=false
 FATHOMLESS_VLLM_REPO="https://github.com/local-inference-lab/vllm"
-FATHOMLESS_VLLM_REF="dev/fathomless-firmament"
 FATHOMLESS_B12X_VERSION="0.30.2"
 B12X_VERSION=""
 FLASHINFER_REF="main"
@@ -587,15 +586,14 @@ fi
 
 NORMALIZED_VLLM_REPO="${VLLM_REPO%/}"
 NORMALIZED_VLLM_REPO="${NORMALIZED_VLLM_REPO%.git}"
-if [ "$NORMALIZED_VLLM_REPO" = "$FATHOMLESS_VLLM_REPO" ] && \
-   [ "$VLLM_REF" = "$FATHOMLESS_VLLM_REF" ]; then
+if [ "$NORMALIZED_VLLM_REPO" = "$FATHOMLESS_VLLM_REPO" ]; then
     B12X_VERSION="$FATHOMLESS_B12X_VERSION"
     TORCH_BASE_VERSION="${TORCH_VERSION%%+*}"
     if [ "$(printf '%s\n' "2.12.0" "$TORCH_BASE_VERSION" | sort -V | head -n1)" != "2.12.0" ]; then
-        echo "Error: ${FATHOMLESS_VLLM_REF} requires --torch-version 2.12.0 or newer for B12X (got ${TORCH_VERSION})."
+        echo "Error: ${FATHOMLESS_VLLM_REPO} requires --torch-version 2.12.0 or newer for B12X (got ${TORCH_VERSION})."
         exit 1
     fi
-    echo "Including B12X ${B12X_VERSION} for ${VLLM_REF}."
+    echo "Including B12X ${B12X_VERSION} for ${NORMALIZED_VLLM_REPO} ref ${VLLM_REF}."
 fi
 
 # Source autodiscover.sh to load .env file

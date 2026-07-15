@@ -154,7 +154,7 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 `--torch-version`, `--torchvision-version`, and `--torchaudio-version` select the packages installed in both the source-build environment and final runner image. The torchvision and torchaudio versions remain resolver-selected when their flags are omitted; `--torchaudio-version none` omits torchaudio when a matching wheel is unavailable.
 
-The `local-inference-lab/vllm` `dev/fathomless-firmament` build also installs B12X 0.30.2 automatically. Only the B12X wheel is added: its shared dependencies come from vLLM so API-sensitive pins such as CUTLASS DSL are not upgraded out from under the selected vLLM revision. B12X kernels remain JIT-compiled at runtime; including this package does not add another CUDA compilation phase to the image build.
+Builds from any ref in `local-inference-lab/vllm` also install B12X 0.30.2 automatically. Only the B12X wheel is added: its shared dependencies come from vLLM so API-sensitive pins such as CUTLASS DSL are not upgraded out from under the selected vLLM revision. B12X kernels remain JIT-compiled at runtime; including this package does not add another CUDA compilation phase to the image build.
 
 ### 2026-07-10
 
@@ -1315,7 +1315,7 @@ Using a different username:
 
 Custom vLLM repositories are cloned fresh instead of using the shared upstream checkout cache. Specifying a custom repository forces a vLLM source build. Upstream preset PRs are skipped by default for custom repositories and refs.
 
-For the exact `local-inference-lab/vllm` and `dev/fathomless-firmament` combination above, the runner also installs B12X 0.30.2 from PyPI automatically. The explicit version makes Docker cache behavior reproducible and changing it invalidates the package-install layer. The install preserves the dependency versions selected by vLLM, including its CUTLASS DSL pin. B12X requires PyTorch 2.12 or newer.
+For any branch, tag, or commit selected from `local-inference-lab/vllm`, the runner also installs B12X 0.30.2 from PyPI automatically. The explicit version makes Docker cache behavior reproducible and changing it invalidates the package-install layer. The install preserves the dependency versions selected by vLLM, including its CUTLASS DSL pin. B12X requires PyTorch 2.12 or newer.
 
 **Copy existing image without rebuilding:**
 
@@ -1655,6 +1655,7 @@ The repository includes several pre-configured mods in the `mods/` directory:
 - **fix-qwen3.5-chat-template/** and **fix-qwen3.6-chat-template/**: Install fixed chat templates used by the Qwen3.5 and Qwen3.6 recipes.
 - **fix-qwen3.5-autoround/**, **fix-qwen3-next-autoround/**, and **fix-qwen35-tp4-marlin/**: Model-specific Qwen AutoRound and Marlin compatibility fixes.
 - **fix-qwen3-coder-next/**: Qwen3-Coder-Next runtime and performance fixes.
+- **dspark-instanttensor/**: Filters embedded `mtp.*` DSpark draft weights before InstantTensor or safetensors I/O, preventing a second full-checkpoint load.
 - **gpu-mem-util-gb/**: Adds experimental `--gpu-memory-utilization-gb` support.
 - **kv-cache-prealloc-cleanup/**: Applies model-specific manual KV-cache startup tweaks: skip CUDA graph profiling when disabled by env and allow `--gpu-memory-utilization-gb` with `--kv-cache-memory-bytes`.
 - **uma-fix/**: Uses CUDA/NVML memory accounting under WSL and skips host-memory UMA accounting there.

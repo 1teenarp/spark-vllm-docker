@@ -383,9 +383,10 @@ test_requested_vllm_prs_apply_to_selected_vllm_ref() {
 
 test_custom_vllm_repo_forces_source_build() {
     setup_fixture
-    run_build --vllm-repo https://github.com/local-inference-lab/vllm.git || fail "--vllm-repo run failed"
+    run_build --vllm-repo https://github.com/example/vllm.git || fail "--vllm-repo run failed"
     assert_log_not_contains '^docker pull eugr/spark-vllm:latest$'
-    assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=main --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm.git --build-arg VLLM_APPLY_PRESET_PRS=0'
+    assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=main --build-arg VLLM_REPO=https://github.com/example/vllm.git --build-arg VLLM_APPLY_PRESET_PRS=0'
+    assert_log_not_contains 'B12X_VERSION='
     assert_output_contains 'Rebuilding vLLM wheels \(--vllm-repo specified\)\.\.\.'
     assert_output_contains 'Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified\.'
     pass "--vllm-repo forces a source build and suppresses upstream preset PRs"
@@ -401,20 +402,31 @@ test_custom_torch_versions_are_forwarded() {
         --torchaudio-version none || fail "custom Torch version run failed"
     assert_log_contains '^docker build --target vllm-export .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg VLLM_REF=dev/fathomless-firmament --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm.git'
     assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg B12X_VERSION=0.30.2 '
-    assert_output_contains 'Including B12X 0\.30\.2 for dev/fathomless-firmament\.'
+    assert_output_contains 'Including B12X 0\.30\.2 for https://github\.com/local-inference-lab/vllm ref dev/fathomless-firmament\.'
     pass "Torch versions and the matching B12X runtime are forwarded to the fork build"
 }
 
-test_fathomless_b12x_requires_torch_212() {
+test_local_inference_lab_b12x_applies_to_any_ref() {
+    setup_fixture
+    run_build \
+        --vllm-repo https://github.com/local-inference-lab/vllm \
+        --vllm-ref dev/spark-fixes-7-14 \
+        --torch-version 2.12.0 || fail "local-inference-lab alternate ref run failed"
+    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 .*--build-arg B12X_VERSION=0.30.2 '
+    assert_output_contains 'Including B12X 0\.30\.2 for https://github\.com/local-inference-lab/vllm ref dev/spark-fixes-7-14\.'
+    pass "all local-inference-lab/vllm refs include the B12X runtime"
+}
+
+test_local_inference_lab_b12x_requires_torch_212() {
     setup_fixture
     if run_build \
         --vllm-repo https://github.com/local-inference-lab/vllm.git \
-        --vllm-ref dev/fathomless-firmament; then
-        fail "fathomless B12X build unexpectedly accepted the default Torch 2.11"
+        --vllm-ref dev/spark-fixes-7-14; then
+        fail "local-inference-lab B12X build unexpectedly accepted the default Torch 2.11"
     fi
     assert_log_not_contains '^docker build'
-    assert_output_contains 'Error: dev/fathomless-firmament requires --torch-version 2\.12\.0 or newer for B12X \(got 2\.11\.0\)\.'
-    pass "fathomless B12X build rejects Torch versions older than 2.12"
+    assert_output_contains 'Error: https://github\.com/local-inference-lab/vllm requires --torch-version 2\.12\.0 or newer for B12X \(got 2\.11\.0\)\.'
+    pass "local-inference-lab B12X builds reject Torch versions older than 2.12"
 }
 
 test_dockerfile_custom_repo_bypasses_shared_cache() {
@@ -568,7 +580,8 @@ test_apply_preset_prs_forces_vllm_rebuild
 test_requested_vllm_prs_apply_to_selected_vllm_ref
 test_custom_vllm_repo_forces_source_build
 test_custom_torch_versions_are_forwarded
-test_fathomless_b12x_requires_torch_212
+test_local_inference_lab_b12x_applies_to_any_ref
+test_local_inference_lab_b12x_requires_torch_212
 test_dockerfile_custom_repo_bypasses_shared_cache
 test_dockerfile_uses_configurable_torch_versions
 test_dockerfile_installs_and_verifies_b12x_runtime
