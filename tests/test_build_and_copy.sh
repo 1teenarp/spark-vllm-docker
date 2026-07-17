@@ -386,7 +386,7 @@ test_custom_vllm_repo_forces_source_build() {
     run_build --vllm-repo https://github.com/example/vllm.git || fail "--vllm-repo run failed"
     assert_log_not_contains '^docker pull eugr/spark-vllm:latest$'
     assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=main --build-arg VLLM_REPO=https://github.com/example/vllm.git --build-arg VLLM_APPLY_PRESET_PRS=0'
-    assert_log_not_contains 'B12X_VERSION='
+    assert_log_not_contains 'B12X_REPO='
     assert_output_contains 'Rebuilding vLLM wheels \(--vllm-repo specified\)\.\.\.'
     assert_output_contains 'Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified\.'
     pass "--vllm-repo forces a source build and suppresses upstream preset PRs"
@@ -401,9 +401,10 @@ test_custom_torch_versions_are_forwarded() {
         --torchvision-version 0.27.0 \
         --torchaudio-version none || fail "custom Torch version run failed"
     assert_log_contains '^docker build --target vllm-export .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg VLLM_REF=dev/fathomless-firmament --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm.git'
-    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg B12X_VERSION=0.30.2 '
-    assert_output_contains 'Including B12X 0\.30\.2 for https://github\.com/local-inference-lab/vllm ref dev/fathomless-firmament\.'
-    pass "Torch versions and the matching B12X runtime are forwarded to the fork build"
+    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg B12X_REPO=https://github.com/lukealonso/b12x.git --build-arg B12X_REF=master '
+    assert_log_contains '.*--build-arg B12X_CACHEBUST=[0-9]+'
+    assert_output_contains 'Building B12X from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/fathomless-firmament\.'
+    pass "Torch versions and the B12X source checkout are forwarded to the fork build"
 }
 
 test_local_inference_lab_b12x_applies_to_any_ref() {
@@ -412,9 +413,9 @@ test_local_inference_lab_b12x_applies_to_any_ref() {
         --vllm-repo https://github.com/local-inference-lab/vllm \
         --vllm-ref dev/spark-fixes-7-14 \
         --torch-version 2.12.0 || fail "local-inference-lab alternate ref run failed"
-    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 .*--build-arg B12X_VERSION=0.30.2 '
-    assert_output_contains 'Including B12X 0\.30\.2 for https://github\.com/local-inference-lab/vllm ref dev/spark-fixes-7-14\.'
-    pass "all local-inference-lab/vllm refs include the B12X runtime"
+    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 .*--build-arg B12X_REPO=https://github.com/lukealonso/b12x.git --build-arg B12X_REF=master '
+    assert_output_contains 'Building B12X from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/spark-fixes-7-14\.'
+    pass "all local-inference-lab/vllm refs include the B12X source build"
 }
 
 test_local_inference_lab_b12x_requires_torch_212() {
@@ -453,20 +454,22 @@ test_dockerfile_uses_configurable_torch_versions() {
     pass "Dockerfile uses configurable Torch package versions in build and runner stages"
 }
 
-test_dockerfile_installs_and_verifies_b12x_runtime() {
+test_dockerfile_builds_and_verifies_b12x_source() {
     for expected in \
-        'if [ "$B12X_VERSION" = "latest" ]; then B12X_SPEC="b12x"' \
-        'uv pip install --upgrade --no-deps "$B12X_SPEC"' \
+        'git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source' \
+        'Refreshing B12X source (cache key: $B12X_CACHEBUST)' \
+        'uv pip install --reinstall --no-deps /tmp/b12x-source' \
         "import b12x; import quack; print('Verified B12X'" \
+        '/workspace/b12x-source-commit' \
         "m.version('nvidia-cutlass-dsl')"; do
         if ! grep -Fq "$expected" "$PROJECT_DIR/Dockerfile"; then
-            fail "Dockerfile B12X runtime install is missing: $expected"
+            fail "Dockerfile B12X source build is missing: $expected"
         fi
     done
-    if grep -Fq 'uv pip install --upgrade "$B12X_SPEC" --override' "$PROJECT_DIR/Dockerfile"; then
-        fail "Dockerfile still permits the B12X install to replace vLLM dependency pins"
+    if grep -Fq 'b12x==' "$PROJECT_DIR/Dockerfile"; then
+        fail "Dockerfile still installs B12X from a package index"
     fi
-    pass "Dockerfile installs B12X without replacing vLLM dependencies and verifies Quack"
+    pass "Dockerfile builds B12X from source without replacing vLLM dependencies"
 }
 
 test_copied_vllm_git_index_is_refreshed_before_patch_apply() {
@@ -584,7 +587,7 @@ test_local_inference_lab_b12x_applies_to_any_ref
 test_local_inference_lab_b12x_requires_torch_212
 test_dockerfile_custom_repo_bypasses_shared_cache
 test_dockerfile_uses_configurable_torch_versions
-test_dockerfile_installs_and_verifies_b12x_runtime
+test_dockerfile_builds_and_verifies_b12x_source
 test_copied_vllm_git_index_is_refreshed_before_patch_apply
 test_dockerfile_applies_flashinfer_prs_without_merging_branch_history
 test_dockerfile_fetches_vllm_prs_from_upstream

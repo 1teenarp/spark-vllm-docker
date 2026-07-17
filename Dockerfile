@@ -7,7 +7,9 @@ ARG NCCL_NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"
 ARG TORCH_VERSION=2.11.0
 ARG TORCHVISION_VERSION=""
 ARG TORCHAUDIO_VERSION=""
-ARG B12X_VERSION=""
+ARG B12X_REPO=""
+ARG B12X_REF=""
+ARG B12X_CACHEBUST=""
 
 # =========================================================
 # STAGE 1: Base Build Image
@@ -949,7 +951,9 @@ FROM ${CUDA_IMAGE} AS runner
 ARG TORCH_VERSION
 ARG TORCHVISION_VERSION
 ARG TORCHAUDIO_VERSION
-ARG B12X_VERSION
+ARG B12X_REPO
+ARG B12X_REF
+ARG B12X_CACHEBUST
 
 # Transferring build settings from build image because of ptxas/jit compilation during vLLM startup
 # Build parallemism
@@ -1055,18 +1059,22 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 
 # The local-inference-lab vLLM fork consumes the external B12X kernel package
 # at runtime. Keep this opt-in so ordinary vLLM/Torch 2.11 images do not pull a
-# package that requires Torch 2.12. Install only the B12X wheel: vLLM already
-# provides its runtime dependencies and pins API-sensitive packages such as
-# nvidia-cutlass-dsl. Letting this late install upgrade dependencies can replace
-# vLLM's CUTLASS pin with an incompatible release. B12X kernels are JIT-compiled
-# on first use; installing the Python package does not compile CUDA code here.
+# package that requires Torch 2.12. Build B12X from its source repository but
+# install it without dependencies: vLLM already provides the runtime packages
+# and pins API-sensitive components such as nvidia-cutlass-dsl. B12X kernels
+# remain JIT-compiled on first use; building its Python wheel here does not
+# compile the CUDA kernels.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    if [ -n "$B12X_VERSION" ]; then \
-        if [ "$B12X_VERSION" = "latest" ]; then B12X_SPEC="b12x"; else B12X_SPEC="b12x==$B12X_VERSION"; fi && \
-        uv pip install --upgrade --no-deps "$B12X_SPEC" && \
-        python3 -c "import importlib.metadata as m; import b12x; import quack; print('Verified B12X', m.version('b12x'), 'with Quack', m.version('quack-kernels'), 'and CUTLASS DSL', m.version('nvidia-cutlass-dsl'))"; \
+    if [ -n "$B12X_REPO" ]; then \
+        echo "Refreshing B12X source (cache key: $B12X_CACHEBUST)" && \
+        git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source && \
+        B12X_COMMIT=$(git -C /tmp/b12x-source rev-parse HEAD) && \
+        uv pip install --reinstall --no-deps /tmp/b12x-source && \
+        printf '%s\n' "$B12X_COMMIT" > /workspace/b12x-source-commit && \
+        python3 -c "import importlib.metadata as m, sys; import b12x; import quack; print('Verified B12X', m.version('b12x'), 'from source commit', sys.argv[1], 'with Quack', m.version('quack-kernels'), 'and CUTLASS DSL', m.version('nvidia-cutlass-dsl'))" "$B12X_COMMIT" && \
+        rm -rf /tmp/b12x-source; \
     else \
-        echo "B12X package not requested; skipping."; \
+        echo "B12X source build not requested; skipping."; \
     fi
 
 # Fix NCCL
