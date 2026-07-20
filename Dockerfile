@@ -321,9 +321,10 @@ ARG VLLM_UPSTREAM_REPO=https://github.com/vllm-project/vllm.git
 ARG VLLM_REPO=https://github.com/vllm-project/vllm.git
 ARG VLLM_REF=main
 
-# DeepGEMM nv_dev includes SM120/SM121 MXFP4 support from PR #324.
+# Pinned while investigating an SM121 DeepSeek-V4 MXFP4 grouped scale-factor
+# regression first observed at nv_dev f8e8fb5 (PR #384); last known good.
 ARG DEEPGEMM_REPO=https://github.com/deepseek-ai/DeepGEMM.git
-ARG DEEPGEMM_REF=nv_dev
+ARG DEEPGEMM_REF=a6b593d2826719dcf4892609af7b84ee23aaf32a
 ENV DEEPGEMM_SRC_DIR=/workspace/DeepGEMM
 
 # The upstream repository uses the shared checkout cache. Custom repositories
