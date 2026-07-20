@@ -146,6 +146,12 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 ## CHANGELOG
 
+### 2026-07-20
+
+#### Experimental B12X build preset
+
+Added `--exp-b12x` (alias: `--experimental-b12x`) as a source-build preset to build vLLM from [a fork by Luke Alonso](https://github.com/local-inference-lab/vllm/tree/dev/gilded-gnosis). This fork supports a collection of experimental high-performance B12X kernels for sm12x architecture. The preset defaults the image tag to `vllm-node-b12x`; an explicit `-t` still takes precedence. Additional vLLM changes can be layered onto the preset with one or more `--apply-vllm-pr` flags. PRs are applied from the upstream vLLM repository, not from Luke's fork!
+
 ### 2026-07-14
 
 #### Custom vLLM repositories and PyTorch versions
@@ -1313,6 +1319,25 @@ Using a different username:
   --torchaudio-version none
 ```
 
+For the maintained experimental B12X combination, the equivalent shortcut is:
+
+```bash
+./build-and-copy.sh --exp-b12x
+```
+
+This uses `local-inference-lab/vllm@dev/gilded-gnosis`, installs B12X from its
+`master` branch, and tags the image as `vllm-node-b12x` unless `-t` is supplied.
+It can be combined with `--apply-vllm-pr <pr-num>` to add custom vLLM patches.
+The preset preserves the selected SM12x target in vLLM's CUDA 13 CMake
+configuration. It defaults to `12.1a`; the B12X branch's NVFP4 MLA cache
+writer cannot compile if that target is reduced to generic `sm_120`. Explicit
+`--gpu-arch 12.0a` and `--gpu-arch 12.0f` selections remain supported and are
+forwarded unchanged rather than being forced to SM121a. FlashInfer architecture
+validation applies to every standard-Dockerfile build, including B12X: alternate
+targets rebuild FlashInfer when no matching architecture marker is present, and
+the cached wheel records its architecture so a later build cannot silently reuse
+a wheel for a different target.
+
 Custom vLLM repositories are cloned fresh instead of using the shared upstream checkout cache. Specifying a custom repository forces a vLLM source build. Upstream preset PRs are skipped by default for custom repositories and refs.
 
 For any branch, tag, or commit selected from `local-inference-lab/vllm`, the runner freshly clones the `master` ref of `https://github.com/lukealonso/b12x.git`, builds its Python wheel, and installs it automatically. A per-build cache key prevents Docker from reusing a stale source checkout. The install uses `--no-deps` to preserve the dependency versions selected by vLLM, including its CUTLASS DSL pin, and records the exact source commit at `/workspace/b12x-source-commit`. B12X requires PyTorch 2.12 or newer.
@@ -1327,9 +1352,9 @@ For any branch, tag, or commit selected from `local-inference-lab/vllm`, the run
 
 | Flag | Description |
 | :--- | :--- |
-| `-t, --tag <tag>` | Local image tag (default: `vllm-node`; auto-set to `vllm-node-tf5` with `--tf5`, `vllm-node-mxfp4` with `--exp-mxfp4`) |
+| `-t, --tag <tag>` | Local image tag (default: `vllm-node`; auto-set to `vllm-node-tf5` with `--tf5`, `vllm-node-mxfp4` with `--exp-mxfp4`, or `vllm-node-b12x` with `--exp-b12x`) |
 | `--use-wheels` | Build only the runner image from downloaded or local precompiled wheels; never implicitly compile missing wheels |
-| `--gpu-arch <arch>` | Target GPU architecture for wheel/source builds. The default `12.1a` still uses the prebuilt image unless another build-forcing flag is set. |
+| `--gpu-arch <arch>` | Target GPU architecture for wheel/source builds. Non-default targets rebuild FlashInfer unless the local cache is marked for that architecture. The default `12.1a` still uses the prebuilt image unless another build-forcing flag is set. |
 | `--rebuild-flashinfer` | Skip prebuilt wheel download; force a fresh local FlashInfer build |
 | `--rebuild-vllm` | Force rebuild vLLM from source |
 | `--force-flashinfer-download` | Force download FlashInfer wheels, skipping cached wheel checks |
@@ -1346,6 +1371,7 @@ For any branch, tag, or commit selected from `local-inference-lab/vllm`, the run
 | `--apply-flashinfer-pr <pr-num>` | Apply a FlashInfer PR patch during build. Can be specified multiple times. |
 | `--tf5` | Deprecated compatibility flag; pulls/tags the prebuilt image as `vllm-node-tf5` unless another build-forcing flag is set. Aliases: `--pre-tf, --pre-transformers`. |
 | `--exp-mxfp4` | Build with experimental native MXFP4 support. Alias: `--experimental-mxfp4`. |
+| `--exp-b12x` | Build the B12X preset from `local-inference-lab/vllm@dev/gilded-gnosis` with PyTorch 2.12.0. Defaults to image tag `vllm-node-b12x`. Alias: `--experimental-b12x`. |
 | `-c, --copy-to <hosts>` | Host(s) to copy the image to after preparation (space- or comma-separated). Hosts with the same image ID are skipped. |
 | `--copy-to-host` | Alias for `--copy-to` (backwards compatibility). |
 | `--copy-parallel` | Copy to all specified hosts concurrently. |

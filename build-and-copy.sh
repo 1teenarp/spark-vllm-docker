@@ -11,6 +11,8 @@ PREBUILT_RUNNER_IMAGE="eugr/spark-vllm:latest"
 USE_WHEELS=false
 REBUILD_FLASHINFER=false
 REBUILD_VLLM=false
+FLASHINFER_ARCH_REBUILD=false
+FLASHINFER_ARCH_MISMATCH=false
 FORCE_FLASHINFER_DOWNLOAD=false
 FORCE_VLLM_DOWNLOAD=false
 COPY_HOSTS=()
@@ -22,9 +24,14 @@ VLLM_REPO="$DEFAULT_VLLM_REPO"
 VLLM_REPO_SET=false
 VLLM_REF="main"
 VLLM_REF_SET=false
-FATHOMLESS_VLLM_REPO="https://github.com/local-inference-lab/vllm"
-FATHOMLESS_B12X_REPO="https://github.com/lukealonso/b12x.git"
-FATHOMLESS_B12X_REF="master"
+EXP_B12X=false
+EXP_B12X_VLLM_REPO="https://github.com/local-inference-lab/vllm"
+EXP_B12X_VLLM_REF="dev/gilded-gnosis"
+EXP_B12X_PACKAGE_REPO="https://github.com/lukealonso/b12x.git"
+EXP_B12X_PACKAGE_REF="master"
+EXP_B12X_TORCH_VERSION="2.12.0"
+EXP_B12X_TORCHVISION_VERSION="0.27.0"
+EXP_B12X_TORCHAUDIO_VERSION="none"
 B12X_REPO=""
 B12X_REF=""
 B12X_CACHEBUST=""
@@ -418,7 +425,7 @@ if match:
 # Help function
 usage() {
     echo "Usage: $0 [OPTIONS]"
-    echo "  -t, --tag <tag>               : Local image tag (default: 'vllm-node', 'vllm-node-tf5' with --tf5, 'vllm-node-mxfp4' with --exp-mxfp4)"
+    echo "  -t, --tag <tag>               : Local image tag (default: 'vllm-node'; preset tags: 'vllm-node-tf5', 'vllm-node-mxfp4', or 'vllm-node-b12x')"
     echo "  --use-wheels                  : Build only the runner from precompiled wheels; never implicitly build source."
     echo "  --gpu-arch <arch>             : GPU architecture for NCCL, wheel, and source builds (default: '${DEFAULT_GPU_ARCH_LIST}')"
     echo "  --rebuild-flashinfer          : Force rebuild of FlashInfer wheels (ignore cached wheels)"
@@ -439,6 +446,7 @@ usage() {
     echo "  -u, --user <user>             : Username for ssh command (default: \$USER)"
     echo "  --tf5                         : Deprecated compatibility flag; tag defaults to 'vllm-node-tf5' (aliases: --pre-tf, --pre-transformers)"
     echo "  --exp-mxfp4, --experimental-mxfp4 : Build with experimental native MXFP4 support"
+    echo "  --exp-b12x, --experimental-b12x   : Build the B12X vLLM preset; tag defaults to 'vllm-node-b12x'"
     echo "  --apply-vllm-pr <pr-num>      : Apply a specific PR patch to vLLM source. Can be specified multiple times."
     echo "  --apply-preset-vllm-prs       : Apply preset vLLM PRs even with --vllm-repo, --vllm-ref, or --apply-vllm-pr."
     echo "  --apply-flashinfer-pr <pr-num>: Apply a specific PR patch to FlashInfer source. Can be specified multiple times."
@@ -523,6 +531,7 @@ while [[ "$#" -gt 0 ]]; do
         --copy-parallel) PARALLEL_COPY=true ;;
         --tf5|--pre-tf|--pre-transformers) PRE_TRANSFORMERS=true ;;
         --exp-mxfp4|--experimental-mxfp4) EXP_MXFP4=true ;;
+        --exp-b12x|--experimental-b12x) EXP_B12X=true ;;
         --apply-vllm-pr)
             if [ -n "$2" ] && [[ "$2" != -* ]]; then
                if [ -n "$VLLM_PRS" ]; then
@@ -570,12 +579,34 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
+# The B12X preset uses the standard Dockerfile and source-build path, but owns
+# the fork/ref and Torch-family versions needed by that integration.
+if [ "$EXP_B12X" = true ]; then
+    if [ "$EXP_MXFP4" = true ]; then echo "Error: --exp-b12x is incompatible with --exp-mxfp4"; exit 1; fi
+    if [ "$USE_WHEELS" = true ]; then echo "Error: --exp-b12x is incompatible with --use-wheels"; exit 1; fi
+    if [ "$VLLM_REPO_SET" = true ]; then echo "Error: --exp-b12x is incompatible with --vllm-repo"; exit 1; fi
+    if [ "$VLLM_REF_SET" = true ]; then echo "Error: --exp-b12x is incompatible with --vllm-ref"; exit 1; fi
+    if [ "$TORCH_VERSION_SET" = true ]; then echo "Error: --exp-b12x is incompatible with --torch-version"; exit 1; fi
+    if [ "$TORCHVISION_VERSION_SET" = true ]; then echo "Error: --exp-b12x is incompatible with --torchvision-version"; exit 1; fi
+    if [ "$TORCHAUDIO_VERSION_SET" = true ]; then echo "Error: --exp-b12x is incompatible with --torchaudio-version"; exit 1; fi
+    if [ "$PRE_TRANSFORMERS" = true ]; then echo "Error: --exp-b12x is incompatible with --tf5"; exit 1; fi
+    if [ "$APPLY_PRESET_VLLM_PRS" = true ]; then echo "Error: --exp-b12x is incompatible with --apply-preset-vllm-prs"; exit 1; fi
+
+    VLLM_REPO="$EXP_B12X_VLLM_REPO"
+    VLLM_REF="$EXP_B12X_VLLM_REF"
+    TORCH_VERSION="$EXP_B12X_TORCH_VERSION"
+    TORCHVISION_VERSION="$EXP_B12X_TORCHVISION_VERSION"
+    TORCHAUDIO_VERSION="$EXP_B12X_TORCHAUDIO_VERSION"
+fi
+
 # Apply default IMAGE_TAG based on flags if -t was not specified
 if [ "$IMAGE_TAG_SET" = false ]; then
     if [ "$PRE_TRANSFORMERS" = true ]; then
         IMAGE_TAG="vllm-node-tf5"
     elif [ "$EXP_MXFP4" = true ]; then
         IMAGE_TAG="vllm-node-mxfp4"
+    elif [ "$EXP_B12X" = true ]; then
+        IMAGE_TAG="vllm-node-b12x"
     fi
 fi
 
@@ -591,13 +622,13 @@ fi
 
 NORMALIZED_VLLM_REPO="${VLLM_REPO%/}"
 NORMALIZED_VLLM_REPO="${NORMALIZED_VLLM_REPO%.git}"
-if [ "$NORMALIZED_VLLM_REPO" = "$FATHOMLESS_VLLM_REPO" ]; then
-    B12X_REPO="$FATHOMLESS_B12X_REPO"
-    B12X_REF="$FATHOMLESS_B12X_REF"
+if [ "$NORMALIZED_VLLM_REPO" = "$EXP_B12X_VLLM_REPO" ]; then
+    B12X_REPO="$EXP_B12X_PACKAGE_REPO"
+    B12X_REF="$EXP_B12X_PACKAGE_REF"
     B12X_CACHEBUST="$(date +%s)"
     TORCH_BASE_VERSION="${TORCH_VERSION%%+*}"
     if [ "$(printf '%s\n' "2.12.0" "$TORCH_BASE_VERSION" | sort -V | head -n1)" != "2.12.0" ]; then
-        echo "Error: ${FATHOMLESS_VLLM_REPO} requires --torch-version 2.12.0 or newer for B12X (got ${TORCH_VERSION})."
+        echo "Error: ${EXP_B12X_VLLM_REPO} requires --torch-version 2.12.0 or newer for B12X (got ${TORCH_VERSION})."
         exit 1
     fi
     echo "Building B12X from ${B12X_REPO} ref ${B12X_REF} for ${NORMALIZED_VLLM_REPO} ref ${VLLM_REF}."
@@ -664,6 +695,19 @@ if [ "$EXP_MXFP4" = true ]; then
     if [ "$REBUILD_VLLM" = true ]; then echo "Error: --exp-mxfp4 is incompatible with --rebuild-vllm"; exit 1; fi
 fi
 
+# FlashInfer wheels are architecture-specific for every build flavor. Trust a
+# cache only when its marker matches the selected target. An absent marker
+# remains compatible with the historical default-architecture cache, but is
+# unsafe for alternate targets.
+CACHED_FLASHINFER_ARCH=""
+if [ -f "./wheels/.flashinfer-arch" ]; then
+    CACHED_FLASHINFER_ARCH=$(cat ./wheels/.flashinfer-arch)
+fi
+if { [ -n "$CACHED_FLASHINFER_ARCH" ] && [ "$CACHED_FLASHINFER_ARCH" != "$GPU_ARCH_LIST" ]; } || \
+   { [ -z "$CACHED_FLASHINFER_ARCH" ] && [ "$GPU_ARCH_LIST" != "$DEFAULT_GPU_ARCH_LIST" ]; }; then
+    FLASHINFER_ARCH_MISMATCH=true
+fi
+
 # Validate --no-build usage
 if [ "$NO_BUILD" = true ] && [ "${#COPY_HOSTS[@]}" -eq 0 ]; then
     echo "Error: --no-build requires --copy-to to be specified"
@@ -680,6 +724,7 @@ fi
 
 CUSTOM_BUILD_REQUESTED=false
 if [ "$EXP_MXFP4" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
+if [ "$EXP_B12X" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$GPU_ARCH_SET" = true ] && [ "$GPU_ARCH_LIST" != "$DEFAULT_GPU_ARCH_LIST" ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$CUSTOM_VLLM_REPO" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$VLLM_REF_SET" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
@@ -694,6 +739,22 @@ if [ "$FORCE_VLLM_DOWNLOAD" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ -n "$VLLM_PRS" ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ "$APPLY_PRESET_VLLM_PRS" = true ]; then CUSTOM_BUILD_REQUESTED=true; fi
 if [ -n "$FLASHINFER_PRS" ]; then CUSTOM_BUILD_REQUESTED=true; fi
+
+# Only local wheel/image builds consume ./wheels. A normal default invocation
+# still pulls the prebuilt runner even if the local wheel cache targets another
+# architecture. --use-wheels never compiles implicitly, so reject an unsafe
+# cache unless the caller also explicitly requested a FlashInfer rebuild.
+if [ "$FLASHINFER_ARCH_MISMATCH" = true ] && \
+   { [ "$CUSTOM_BUILD_REQUESTED" = true ] || [ "$USE_WHEELS" = true ]; }; then
+    if [ "$USE_WHEELS" = true ] && [ "$REBUILD_FLASHINFER" != true ]; then
+        echo "Error: Cached FlashInfer wheels do not match GPU architecture $GPU_ARCH_LIST."
+        echo "       Re-run with --rebuild-flashinfer or provide matching wheels with a .flashinfer-arch marker."
+        exit 1
+    fi
+    REBUILD_FLASHINFER=true
+    FLASHINFER_ARCH_REBUILD=true
+    CUSTOM_BUILD_REQUESTED=true
+fi
 
 USE_PREBUILT_IMAGE=false
 if [ "$NO_BUILD" = false ] && [ "$USE_WHEELS" = false ] && [ "$CUSTOM_BUILD_REQUESTED" = false ]; then
@@ -713,12 +774,13 @@ if [[ "$CLEANUP_MODE" == "true" ]]; then
         echo "No *.whl files found in $WHEELS_DIR"
     fi
     
-    # Remove all .-commit files
-    if compgen -G "$WHEELS_DIR/.*-commit" > /dev/null 2>&1; then
-        rm -f "$WHEELS_DIR"/.*-commit
-        echo "Removed .*-commit files from $WHEELS_DIR"
+    # Remove all wheel provenance files
+    if compgen -G "$WHEELS_DIR/.*-commit" > /dev/null 2>&1 || \
+       compgen -G "$WHEELS_DIR/.*-arch" > /dev/null 2>&1; then
+        rm -f "$WHEELS_DIR"/.*-commit "$WHEELS_DIR"/.*-arch
+        echo "Removed wheel provenance files from $WHEELS_DIR"
     else
-        echo "No .*-commit files found in $WHEELS_DIR"
+        echo "No wheel provenance files found in $WHEELS_DIR"
     fi
     
     echo "Cleanup complete."
@@ -807,6 +869,8 @@ if [ "$NO_BUILD" = false ]; then
                 echo "Rebuilding FlashInfer wheels (--flashinfer-ref specified)..."
             elif [ -n "$FLASHINFER_PRS" ]; then
                 echo "Rebuilding FlashInfer wheels (--apply-flashinfer-pr specified)..."
+            elif [ "$FLASHINFER_ARCH_REBUILD" = true ]; then
+                echo "Rebuilding FlashInfer wheels for GPU architecture $GPU_ARCH_LIST..."
             else
                 echo "Rebuilding FlashInfer wheels (--rebuild-flashinfer specified)..."
             fi
@@ -869,7 +933,11 @@ if [ "$NO_BUILD" = false ]; then
 
         BUILD_VLLM=false
         if [ "$REBUILD_VLLM" = true ]; then
-            if [ "$VLLM_REF_SET" = true ] && [ "$VLLM_PR_APPLICATION_REQUESTED" = true ]; then
+            if [ "$EXP_B12X" = true ] && [ -n "$VLLM_PRS" ]; then
+                echo "Rebuilding vLLM wheels (--exp-b12x preset with requested vLLM PRs)..."
+            elif [ "$EXP_B12X" = true ]; then
+                echo "Rebuilding vLLM wheels (--exp-b12x preset)..."
+            elif [ "$VLLM_REF_SET" = true ] && [ "$VLLM_PR_APPLICATION_REQUESTED" = true ]; then
                 echo "Rebuilding vLLM wheels (applying vLLM PRs to --vllm-ref $VLLM_REF)..."
             elif [ "$VLLM_REF_SET" = true ]; then
                 echo "Rebuilding vLLM wheels (--vllm-ref specified)..."
@@ -926,6 +994,13 @@ if [ "$NO_BUILD" = false ]; then
             if [ -n "$VLLM_PRS" ]; then
                 echo "Applying vLLM PRs: $VLLM_PRS"
                 VLLM_CMD+=("--build-arg" "VLLM_PRS=$VLLM_PRS")
+            fi
+
+            if [ "$EXP_B12X" = true ]; then
+                # Preserve the selected SM12x target. This prevents 12.1a from
+                # being reduced to plain sm_120 without overriding explicit
+                # --gpu-arch 12.0a or 12.0f selections.
+                VLLM_CMD+=("--build-arg" "VLLM_PRESERVE_SM12X_TARGET=1")
             fi
 
             VLLM_CMD+=(".")

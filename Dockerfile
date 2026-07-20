@@ -282,8 +282,10 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     # flashinfer-jit-cache
     cd ../flashinfer-jit-cache && \
     uv build --no-build-isolation --wheel . --out-dir=/workspace/wheels -v && \
-    # dump git ref in the wheels dir
-    cd .. && git rev-parse HEAD > /workspace/wheels/.flashinfer-commit
+    # dump git ref and target architecture in the wheels dir
+    cd .. && \
+    git rev-parse HEAD > /workspace/wheels/.flashinfer-commit && \
+    printf '%s\n' "$FLASHINFER_CUDA_ARCH_LIST" > /workspace/wheels/.flashinfer-arch
 
 # =========================================================
 # STAGE 3: FlashInfer Wheel Export
@@ -397,6 +399,7 @@ WORKDIR $VLLM_BASE_DIR/vllm
 ARG VLLM_PRESET_PRS="47392 47618"
 ARG VLLM_APPLY_PRESET_PRS=""
 ARG VLLM_PRS=""
+ARG VLLM_PRESERVE_SM12X_TARGET=0
 
 # PR refs include the branch history they were developed on. Use upstream main
 # only to identify each PR's patch range, then apply that patch to VLLM_REF.
@@ -504,6 +507,44 @@ RUN set -eux; \
         fi; \
         echo "Final vLLM source after PR application: requested $VLLM_REF ($VLLM_REQUESTED_HEAD), final $(git describe --tags --always --dirty)."; \
     fi
+
+# CUDA 13 vLLM builds normally collapse a requested 12.1a target to the
+# generic 12.0 entry. Adding 12.1 to the supported set preserves the selected
+# SM12x target through CMake's intersection logic: 12.1a remains 12.1a, while
+# explicitly selected 12.0a and 12.0f targets remain unchanged. Keep this
+# opt-in so the standard upstream build retains its own architecture policy.
+RUN VLLM_PRESERVE_SM12X_TARGET="${VLLM_PRESERVE_SM12X_TARGET}" python3 - <<'PY'
+import os
+from pathlib import Path
+
+if os.environ["VLLM_PRESERVE_SM12X_TARGET"] not in {
+    "1", "true", "TRUE", "yes", "YES"
+}:
+    print("SM12x target preservation not requested; skipping")
+    raise SystemExit(0)
+
+target = Path("CMakeLists.txt")
+cuda13_default = (
+    'set(CUDA_SUPPORTED_ARCHS '
+    '"7.5;8.0;8.6;8.7;8.9;9.0;10.0;11.0;12.0")'
+)
+cuda13_sm121 = (
+    'set(CUDA_SUPPORTED_ARCHS '
+    '"7.5;8.0;8.6;8.7;8.9;9.0;10.0;11.0;12.0;12.1")'
+)
+
+text = target.read_text()
+if cuda13_sm121 in text:
+    print("CUDA 13 SM12x subarchitecture allow-list already present; skipping")
+elif text.count(cuda13_default) == 1:
+    target.write_text(text.replace(cuda13_default, cuda13_sm121, 1))
+    print("Enabled selected SM12x target preservation for CUDA 13 vLLM build")
+else:
+    raise SystemExit(
+        "Unable to preserve the selected SM12x target: expected CUDA 13 "
+        "CUDA_SUPPORTED_ARCHS entry was not found exactly once"
+    )
+PY
 
 # TEMPORARY PATCH: vLLM PR #47914 added per-KV-group causal metadata by
 # treating non-bool causal as Mapping[int, bool]. DiffusionGemma passes a
