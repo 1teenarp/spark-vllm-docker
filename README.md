@@ -146,6 +146,13 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 ## CHANGELOG
 
+### 2026-07-21
+
+#### B12X package renamed to SparkInfer
+
+The external `b12x` kernel package used by `--exp-b12x` is now distributed and
+imported as `sparkinfer`. The source repository remains `lukealonso/b12x`.
+
 ### 2026-07-20
 
 #### Experimental B12X build preset
@@ -160,7 +167,7 @@ Added `--exp-b12x` (alias: `--experimental-b12x`) as a source-build preset to bu
 
 `--torch-version`, `--torchvision-version`, and `--torchaudio-version` select the packages installed in both the source-build environment and final runner image. The torchvision and torchaudio versions remain resolver-selected when their flags are omitted; `--torchaudio-version none` omits torchaudio when a matching wheel is unavailable.
 
-Builds from any ref in `local-inference-lab/vllm` also clone and build the `master` ref of `lukealonso/b12x` automatically. The source layer is refreshed on every applicable runner build so a previously cached clone cannot hide newer upstream commits. Only the locally built B12X wheel is installed: its shared dependencies come from vLLM so API-sensitive pins such as CUTLASS DSL are not upgraded out from under the selected vLLM revision. The checked-out commit is recorded at `/workspace/b12x-source-commit` in the image. B12X kernels remain JIT-compiled at runtime; building its Python wheel does not add another CUDA compilation phase to the image build.
+Builds from any ref in `local-inference-lab/vllm` also clone and build the `master` ref of `lukealonso/b12x` automatically. The repository now produces the `sparkinfer` distribution (formerly `b12x`). The source layer is refreshed on every applicable runner build so a previously cached clone cannot hide newer upstream commits. Only the locally built SparkInfer wheel is installed: its shared dependencies come from vLLM so API-sensitive pins such as CUTLASS DSL are not upgraded out from under the selected vLLM revision. The checked-out commit is recorded at `/workspace/sparkinfer-source-commit` in the image. SparkInfer kernels remain JIT-compiled at runtime; building its Python wheel does not add another CUDA compilation phase to the image build.
 
 ### 2026-07-10
 
@@ -1340,7 +1347,7 @@ a wheel for a different target.
 
 Custom vLLM repositories are cloned fresh instead of using the shared upstream checkout cache. Specifying a custom repository forces a vLLM source build. Upstream preset PRs are skipped by default for custom repositories and refs.
 
-For any branch, tag, or commit selected from `local-inference-lab/vllm`, the runner freshly clones the `master` ref of `https://github.com/lukealonso/b12x.git`, builds its Python wheel, and installs it automatically. A per-build cache key prevents Docker from reusing a stale source checkout. The install uses `--no-deps` to preserve the dependency versions selected by vLLM, including its CUTLASS DSL pin, and records the exact source commit at `/workspace/b12x-source-commit`. B12X requires PyTorch 2.12 or newer.
+For any branch, tag, or commit selected from `local-inference-lab/vllm`, the runner freshly clones the `master` ref of `https://github.com/lukealonso/b12x.git`, builds and installs its `sparkinfer` distribution automatically. A per-build cache key prevents Docker from reusing a stale source checkout. The install uses `--no-deps` to preserve the dependency versions selected by vLLM, including its CUTLASS DSL pin, and records the exact source commit at `/workspace/sparkinfer-source-commit`. SparkInfer requires PyTorch 2.12 or newer.
 
 **Copy existing image without rebuilding:**
 

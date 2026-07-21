@@ -32,9 +32,9 @@ EXP_B12X_PACKAGE_REF="master"
 EXP_B12X_TORCH_VERSION="2.12.0"
 EXP_B12X_TORCHVISION_VERSION="0.27.0"
 EXP_B12X_TORCHAUDIO_VERSION="none"
-B12X_REPO=""
-B12X_REF=""
-B12X_CACHEBUST=""
+SPARKINFER_REPO=""
+SPARKINFER_REF=""
+SPARKINFER_CACHEBUST=""
 FLASHINFER_REF="main"
 FLASHINFER_REF_SET=false
 TMP_IMAGE=""
@@ -90,8 +90,8 @@ generate_build_metadata() {
     local torch_version="${10}"
     local torchvision_version="${11}"
     local torchaudio_version="${12}"
-    local b12x_repo="${13}"
-    local b12x_ref="${14}"
+    local sparkinfer_repo="${13}"
+    local sparkinfer_ref="${14}"
 
     local base_image
     base_image=$(grep -m1 '^FROM .* AS runner' "$dockerfile" | awk '{print $2}')
@@ -110,8 +110,8 @@ build_args:
   torch_version: "${torch_version}"
   torchvision_version: "${torchvision_version}"
   torchaudio_version: "${torchaudio_version}"
-  b12x_repo: "${b12x_repo}"
-  b12x_ref: "${b12x_ref}"
+  sparkinfer_repo: "${sparkinfer_repo}"
+  sparkinfer_ref: "${sparkinfer_ref}"
   transformers_5: ${transformers_5}
   exp_mxfp4: ${exp_mxfp4}
   vllm_prs: "${vllm_prs}"
@@ -623,15 +623,15 @@ fi
 NORMALIZED_VLLM_REPO="${VLLM_REPO%/}"
 NORMALIZED_VLLM_REPO="${NORMALIZED_VLLM_REPO%.git}"
 if [ "$NORMALIZED_VLLM_REPO" = "$EXP_B12X_VLLM_REPO" ]; then
-    B12X_REPO="$EXP_B12X_PACKAGE_REPO"
-    B12X_REF="$EXP_B12X_PACKAGE_REF"
-    B12X_CACHEBUST="$(date +%s)"
+    SPARKINFER_REPO="$EXP_B12X_PACKAGE_REPO"
+    SPARKINFER_REF="$EXP_B12X_PACKAGE_REF"
+    SPARKINFER_CACHEBUST="$(date +%s)"
     TORCH_BASE_VERSION="${TORCH_VERSION%%+*}"
     if [ "$(printf '%s\n' "2.12.0" "$TORCH_BASE_VERSION" | sort -V | head -n1)" != "2.12.0" ]; then
-        echo "Error: ${EXP_B12X_VLLM_REPO} requires --torch-version 2.12.0 or newer for B12X (got ${TORCH_VERSION})."
+        echo "Error: ${EXP_B12X_VLLM_REPO} requires --torch-version 2.12.0 or newer for SparkInfer (got ${TORCH_VERSION})."
         exit 1
     fi
-    echo "Building B12X from ${B12X_REPO} ref ${B12X_REF} for ${NORMALIZED_VLLM_REPO} ref ${VLLM_REF}."
+    echo "Building SparkInfer from ${SPARKINFER_REPO} ref ${SPARKINFER_REF} for ${NORMALIZED_VLLM_REPO} ref ${VLLM_REF}."
 fi
 
 # Source autodiscover.sh to load .env file
@@ -1036,16 +1036,16 @@ if [ "$NO_BUILD" = false ]; then
         generate_build_metadata Dockerfile "$VLLM_VERSION" "$VLLM_COMMIT" "$FLASHINFER_COMMIT" \
             "$VLLM_REF" "true" "false" "$VLLM_PRS" "$VLLM_REPO" "$TORCH_VERSION" \
             "${TORCHVISION_VERSION:-resolver-selected}" "${TORCHAUDIO_VERSION:-resolver-selected}" \
-            "${B12X_REPO:-disabled}" "${B12X_REF:-disabled}"
+            "${SPARKINFER_REPO:-disabled}" "${SPARKINFER_REF:-disabled}"
 
         RUNNER_CMD=("docker" "build"
             "-t" "$IMAGE_TAG"
             "${COMMON_BUILD_FLAGS[@]}")
 
-        if [ -n "$B12X_REPO" ]; then
-            RUNNER_CMD+=("--build-arg" "B12X_REPO=$B12X_REPO")
-            RUNNER_CMD+=("--build-arg" "B12X_REF=$B12X_REF")
-            RUNNER_CMD+=("--build-arg" "B12X_CACHEBUST=$B12X_CACHEBUST")
+        if [ -n "$SPARKINFER_REPO" ]; then
+            RUNNER_CMD+=("--build-arg" "SPARKINFER_REPO=$SPARKINFER_REPO")
+            RUNNER_CMD+=("--build-arg" "SPARKINFER_REF=$SPARKINFER_REF")
+            RUNNER_CMD+=("--build-arg" "SPARKINFER_CACHEBUST=$SPARKINFER_CACHEBUST")
         fi
 
         RUNNER_CMD+=(".")

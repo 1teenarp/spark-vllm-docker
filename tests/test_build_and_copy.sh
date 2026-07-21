@@ -463,7 +463,7 @@ test_custom_vllm_repo_forces_source_build() {
     run_build --vllm-repo https://github.com/example/vllm.git || fail "--vllm-repo run failed"
     assert_log_not_contains '^docker pull eugr/spark-vllm:latest$'
     assert_log_contains '^docker build --target vllm-export .*--build-arg VLLM_REF=main --build-arg VLLM_REPO=https://github.com/example/vllm.git --build-arg VLLM_APPLY_PRESET_PRS=0'
-    assert_log_not_contains 'B12X_REPO='
+    assert_log_not_contains 'SPARKINFER_REPO='
     assert_output_contains 'Rebuilding vLLM wheels \(--vllm-repo specified\)\.\.\.'
     assert_output_contains 'Skipping preset vLLM PRs because --vllm-repo, --vllm-ref, or --apply-vllm-pr was specified\.'
     pass "--vllm-repo forces a source build and suppresses upstream preset PRs"
@@ -474,11 +474,11 @@ test_exp_b12x_uses_preset_source_build() {
     run_build --exp-b12x || fail "--exp-b12x run failed"
     assert_log_not_contains '^docker pull eugr/spark-vllm:latest$'
     assert_log_contains '^docker build --target vllm-export .*--build-arg TORCH_CUDA_ARCH_LIST=12.1a --build-arg FLASHINFER_CUDA_ARCH_LIST=12.1a .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg VLLM_REF=dev/gilded-gnosis --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm --build-arg VLLM_APPLY_PRESET_PRS=0 .*--build-arg VLLM_PRESERVE_SM12X_TARGET=1'
-    assert_log_contains '^docker build -t vllm-node-b12x .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg B12X_REPO=https://github.com/lukealonso/b12x.git --build-arg B12X_REF=master '
-    assert_log_contains '.*--build-arg B12X_CACHEBUST=[0-9]+'
+    assert_log_contains '^docker build -t vllm-node-b12x .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg SPARKINFER_REPO=https://github.com/lukealonso/b12x.git --build-arg SPARKINFER_REF=master '
+    assert_log_contains '.*--build-arg SPARKINFER_CACHEBUST=[0-9]+'
     assert_log_not_contains 'Dockerfile\.mxfp4'
     assert_output_contains 'Rebuilding vLLM wheels \(--exp-b12x preset\)\.\.\.'
-    assert_output_contains 'Building B12X from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/gilded-gnosis\.'
+    assert_output_contains 'Building SparkInfer from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/gilded-gnosis\.'
     pass "--exp-b12x selects the B12X source-build preset and default tag"
 }
 
@@ -580,10 +580,10 @@ test_custom_torch_versions_are_forwarded() {
         --torchvision-version 0.27.0 \
         --torchaudio-version none || fail "custom Torch version run failed"
     assert_log_contains '^docker build --target vllm-export .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg VLLM_REF=dev/fathomless-firmament --build-arg VLLM_REPO=https://github.com/local-inference-lab/vllm.git'
-    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg B12X_REPO=https://github.com/lukealonso/b12x.git --build-arg B12X_REF=master '
-    assert_log_contains '.*--build-arg B12X_CACHEBUST=[0-9]+'
-    assert_output_contains 'Building B12X from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/fathomless-firmament\.'
-    pass "Torch versions and the B12X source checkout are forwarded to the fork build"
+    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 --build-arg TORCHVISION_VERSION=0.27.0 --build-arg TORCHAUDIO_VERSION=none .*--build-arg SPARKINFER_REPO=https://github.com/lukealonso/b12x.git --build-arg SPARKINFER_REF=master '
+    assert_log_contains '.*--build-arg SPARKINFER_CACHEBUST=[0-9]+'
+    assert_output_contains 'Building SparkInfer from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/fathomless-firmament\.'
+    pass "Torch versions and the SparkInfer source checkout are forwarded to the fork build"
 }
 
 test_local_inference_lab_b12x_applies_to_any_ref() {
@@ -592,9 +592,9 @@ test_local_inference_lab_b12x_applies_to_any_ref() {
         --vllm-repo https://github.com/local-inference-lab/vllm \
         --vllm-ref dev/spark-fixes-7-14 \
         --torch-version 2.12.0 || fail "local-inference-lab alternate ref run failed"
-    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 .*--build-arg B12X_REPO=https://github.com/lukealonso/b12x.git --build-arg B12X_REF=master '
-    assert_output_contains 'Building B12X from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/spark-fixes-7-14\.'
-    pass "all local-inference-lab/vllm refs include the B12X source build"
+    assert_log_contains '^docker build -t vllm-node .*--build-arg TORCH_VERSION=2.12.0 .*--build-arg SPARKINFER_REPO=https://github.com/lukealonso/b12x.git --build-arg SPARKINFER_REF=master '
+    assert_output_contains 'Building SparkInfer from https://github\.com/lukealonso/b12x\.git ref master for https://github\.com/local-inference-lab/vllm ref dev/spark-fixes-7-14\.'
+    pass "all local-inference-lab/vllm refs include the SparkInfer source build"
 }
 
 test_local_inference_lab_b12x_requires_torch_212() {
@@ -605,8 +605,8 @@ test_local_inference_lab_b12x_requires_torch_212() {
         fail "local-inference-lab B12X build unexpectedly accepted the default Torch 2.11"
     fi
     assert_log_not_contains '^docker build'
-    assert_output_contains 'Error: https://github\.com/local-inference-lab/vllm requires --torch-version 2\.12\.0 or newer for B12X \(got 2\.11\.0\)\.'
-    pass "local-inference-lab B12X builds reject Torch versions older than 2.12"
+    assert_output_contains 'Error: https://github\.com/local-inference-lab/vllm requires --torch-version 2\.12\.0 or newer for SparkInfer \(got 2\.11\.0\)\.'
+    pass "local-inference-lab SparkInfer builds reject Torch versions older than 2.12"
 }
 
 test_dockerfile_custom_repo_bypasses_shared_cache() {
@@ -633,22 +633,26 @@ test_dockerfile_uses_configurable_torch_versions() {
     pass "Dockerfile uses configurable Torch package versions in build and runner stages"
 }
 
-test_dockerfile_builds_and_verifies_b12x_source() {
+test_dockerfile_builds_and_verifies_sparkinfer_source() {
     for expected in \
-        'git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source' \
-        'Refreshing B12X source (cache key: $B12X_CACHEBUST)' \
-        'uv pip install --reinstall --no-deps /tmp/b12x-source' \
-        "import b12x; import quack; print('Verified B12X'" \
-        '/workspace/b12x-source-commit' \
+        'git clone --depth 1 --branch "$SPARKINFER_REF" "$SPARKINFER_REPO" /tmp/sparkinfer-source' \
+        'Refreshing SparkInfer source (cache key: $SPARKINFER_CACHEBUST)' \
+        'uv pip install --reinstall --no-deps /tmp/sparkinfer-source' \
+        "import sparkinfer; print('Verified SparkInfer'" \
+        "m.version('sparkinfer')" \
+        '/workspace/sparkinfer-source-commit' \
         "m.version('nvidia-cutlass-dsl')"; do
         if ! grep -Fq "$expected" "$PROJECT_DIR/Dockerfile"; then
-            fail "Dockerfile B12X source build is missing: $expected"
+            fail "Dockerfile SparkInfer source build is missing: $expected"
         fi
     done
-    if grep -Fq 'b12x==' "$PROJECT_DIR/Dockerfile"; then
-        fail "Dockerfile still installs B12X from a package index"
+    if grep -Fq 'sparkinfer==' "$PROJECT_DIR/Dockerfile"; then
+        fail "Dockerfile installs SparkInfer from a package index instead of source"
     fi
-    pass "Dockerfile builds B12X from source without replacing vLLM dependencies"
+    if grep -Eq "import b12x|m\.version\('b12x'\)" "$PROJECT_DIR/Dockerfile"; then
+        fail "Dockerfile still verifies the retired b12x package name"
+    fi
+    pass "Dockerfile builds SparkInfer from source without replacing vLLM dependencies"
 }
 
 test_copied_vllm_git_index_is_refreshed_before_patch_apply() {
@@ -779,7 +783,7 @@ test_local_inference_lab_b12x_applies_to_any_ref
 test_local_inference_lab_b12x_requires_torch_212
 test_dockerfile_custom_repo_bypasses_shared_cache
 test_dockerfile_uses_configurable_torch_versions
-test_dockerfile_builds_and_verifies_b12x_source
+test_dockerfile_builds_and_verifies_sparkinfer_source
 test_copied_vllm_git_index_is_refreshed_before_patch_apply
 test_dockerfile_applies_flashinfer_prs_without_merging_branch_history
 test_dockerfile_fetches_vllm_prs_from_upstream
