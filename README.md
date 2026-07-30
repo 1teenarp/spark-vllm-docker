@@ -148,6 +148,28 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 ### 2026-07-30
 
+#### Inkling Small NVFP4 support
+
+Added the support for
+`thinkingmachines/Inkling-Small-NVFP4`. It requires at least dual DGX Spark setup.
+
+```bash
+./run-recipe.sh inkling-small-nvfp4
+```
+
+Add `--setup` on the first run to prepare the container and download and
+distribute the model.
+
+#### Official vLLM earlyoom, InstantTensor, and SciPy support
+
+`mods/use-official-vllm` now installs `earlyoom`, InstantTensor, and SciPy in
+addition to the compatibility packages needed by other mods. This makes
+`launch-cluster.sh --earlyoom`, `--load-format instanttensor`, and SciPy-based
+functionality available when launching official vLLM images such as
+`vllm-openai`. The Python package install pins the image's existing Torch
+packages so the CUDA-enabled build is not replaced during dependency
+resolution.
+
 #### Repeatable Docker volume mappings
 
 `launch-cluster.sh` and `run-recipe.sh` now accept repeatable `-v` / `--volume` mappings using Docker's `local_path:container_path` syntax. In cluster mode, each mapping is applied to every launched node.
@@ -1711,8 +1733,10 @@ The repository includes several pre-configured mods in the `mods/` directory:
 - **drop-caches/**: Periodically clears filesystem caches for large models running near the memory limit.
 - **diffusiongemma/**: Adds DiffusionGemma support, dynamic causal attention compatibility, and Gemma4 reasoning/content-channel fixes used by the DiffusionGemma recipes.
 - **nemotron-nano/** and **nemotron-super/**: Nemotron reasoning parser and model support helpers.
+- **inkling-sm12-paged-kv/**: Routes Inkling's SM12 paged-KV relative attention through a vendored FA4 implementation while leaving other models and GPU architectures unchanged.
+- **instanttensor-hybrid-draft-loader/**: Keeps a target model on InstantTensor while using lazy safetensors for eligible speculative draft weights, including embedded MTP drafts.
 - **exp-b12x/**: Experimental FlashInfer b12x support for builds that include the required upstream vLLM support.
-- **use-official-vllm/**: Installs `git` inside official vLLM containers (Ubuntu/Debian-based) so that other mods that rely on `git apply` work correctly, and redirects the pip-installed NCCL library to the system `libnccl2` library to avoid DGX Spark multi-node NCCL hangs. Apply this mod first when using official vLLM images (e.g. `vllm-openai`).
+- **use-official-vllm/**: Installs `git`, `earlyoom`, InstantTensor, and SciPy inside official vLLM containers (Ubuntu/Debian-based) so that other mods can rely on `git apply`, the launcher can use `--earlyoom`, and vLLM can use `--load-format instanttensor` and SciPy-based functionality. The Python install preserves the image's existing Torch build. The mod also redirects the pip-installed NCCL library to the system `libnccl2` library to avoid DGX Spark multi-node NCCL hangs. Apply this mod first when using official vLLM images (e.g. `vllm-openai`).
 
 Each mod directory typically contains:
 - Patch files (`.patch`) for code modifications and/or other assets.
