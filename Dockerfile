@@ -74,7 +74,7 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      set -- "torch==$TORCH_VERSION" "$TORCHVISION_SPEC" && \
      if [ -n "$TORCHAUDIO_SPEC" ]; then set -- "$@" "$TORCHAUDIO_SPEC"; fi && \
      uv pip install "$@" triton --index-url https://download.pytorch.org/whl/cu130 && \
-     uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2" filelock pynvml requests tqdm
+     uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi==0.1.12" filelock pynvml requests tqdm
 
 # Configure Ccache for CUDA/C++
 ENV PATH=/usr/lib/ccache:$PATH
@@ -1049,7 +1049,7 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      set -- "torch==$TORCH_VERSION" "$TORCHVISION_SPEC" && \
      if [ -n "$TORCHAUDIO_SPEC" ]; then set -- "$@" "$TORCHAUDIO_SPEC"; fi && \
      uv pip install "$@" triton --index-url https://download.pytorch.org/whl/cu130 && \
-     uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi<0.2"
+     uv pip install nvidia-nvshmem-cu13 "apache-tvm-ffi==0.1.12"
 
 # Install wheels from host ./wheels/ (bind-mounted from build context — no layer bloat)
 # PRE_TRANSFORMERS=1 is retained for manual legacy builds; build-and-copy.sh no longer sets it for --tf5.
