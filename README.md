@@ -146,6 +146,16 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 ## CHANGELOG
 
+### 2026-07-31
+
+#### DeepSeek V4 Flash 0731 B12X cluster recipe
+
+Added the cluster-only `deepseek-v4-flash-0731` recipe for serving `deepseek-ai/DeepSeek-V4-Flash-0731` on a dual DGX Spark cluster. The recipe requires B12X container (vllm-node-b12x) that can be built by using `./build-and-copy.sh --exp-b12x -c` (or just allow the recipe system to build it for you).
+
+```bash
+./run-recipe.sh deepseek-v4-flash-0731
+```
+
 ### 2026-07-30
 
 #### Inkling Small NVFP4 support
