@@ -7,9 +7,9 @@ ARG NCCL_NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"
 ARG TORCH_VERSION=2.11.0
 ARG TORCHVISION_VERSION=""
 ARG TORCHAUDIO_VERSION=""
-ARG SPARKINFER_REPO=""
-ARG SPARKINFER_REF=""
-ARG SPARKINFER_CACHEBUST=""
+ARG B12X_REPO=""
+ARG B12X_REF=""
+ARG B12X_CACHEBUST=""
 
 # =========================================================
 # STAGE 1: Base Build Image
@@ -598,9 +598,9 @@ FROM ${CUDA_IMAGE} AS runner
 ARG TORCH_VERSION
 ARG TORCHVISION_VERSION
 ARG TORCHAUDIO_VERSION
-ARG SPARKINFER_REPO
-ARG SPARKINFER_REF
-ARG SPARKINFER_CACHEBUST
+ARG B12X_REPO
+ARG B12X_REF
+ARG B12X_CACHEBUST
 
 # Transferring build settings from build image because of ptxas/jit compilation during vLLM startup
 # Build parallemism
@@ -707,25 +707,24 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv pip install ray[default] fastsafetensors instanttensor \
         --override /tmp/torch-override.txt
 
-# The local-inference-lab vLLM fork consumes the external SparkInfer kernel package
-# (formerly named B12X)
+# The local-inference-lab vLLM fork consumes the external B12X kernel package
 # at runtime. Keep this opt-in so ordinary vLLM/Torch 2.11 images do not pull a
-# package that requires Torch 2.12. Build SparkInfer from its source repository but
+# package that requires Torch 2.12. Build B12X from its source repository but
 # install it without dependencies: vLLM already provides the runtime packages
-# and pins API-sensitive components such as nvidia-cutlass-dsl. SparkInfer kernels
+# and pins API-sensitive components such as nvidia-cutlass-dsl. B12X kernels
 # remain JIT-compiled on first use; building its Python wheel here does not
 # compile the CUDA kernels.
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
-    if [ -n "$SPARKINFER_REPO" ]; then \
-        echo "Refreshing SparkInfer source (cache key: $SPARKINFER_CACHEBUST)" && \
-        git clone --depth 1 --branch "$SPARKINFER_REF" "$SPARKINFER_REPO" /tmp/sparkinfer-source && \
-        SPARKINFER_COMMIT=$(git -C /tmp/sparkinfer-source rev-parse HEAD) && \
-        uv pip install --reinstall --no-deps /tmp/sparkinfer-source && \
-        printf '%s\n' "$SPARKINFER_COMMIT" > /workspace/sparkinfer-source-commit && \
-        python3 -c "import importlib.metadata as m, sys; import sparkinfer; print('Verified SparkInfer', m.version('sparkinfer'), 'from source commit', sys.argv[1], 'with CUTLASS DSL', m.version('nvidia-cutlass-dsl'))" "$SPARKINFER_COMMIT" && \
-        rm -rf /tmp/sparkinfer-source; \
+    if [ -n "$B12X_REPO" ]; then \
+        echo "Refreshing B12X source (cache key: $B12X_CACHEBUST)" && \
+        git clone --depth 1 --branch "$B12X_REF" "$B12X_REPO" /tmp/b12x-source && \
+        B12X_COMMIT=$(git -C /tmp/b12x-source rev-parse HEAD) && \
+        uv pip install --reinstall --no-deps /tmp/b12x-source && \
+        printf '%s\n' "$B12X_COMMIT" > /workspace/b12x-source-commit && \
+        python3 -c "import importlib.metadata as m, sys; import b12x; print('Verified B12X', m.version('b12x'), 'from source commit', sys.argv[1], 'with CUTLASS DSL', m.version('nvidia-cutlass-dsl'))" "$B12X_COMMIT" && \
+        rm -rf /tmp/b12x-source; \
     else \
-        echo "SparkInfer source build not requested; skipping."; \
+        echo "B12X source build not requested; skipping."; \
     fi
 
 # Fix NCCL
