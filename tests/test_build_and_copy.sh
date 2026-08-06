@@ -48,6 +48,7 @@ setup_fixture() {
     cp "$PROJECT_DIR/autodiscover.sh" "$FIXTURE_DIR/"
     cp "$PROJECT_DIR/Dockerfile" "$FIXTURE_DIR/"
     cp "$PROJECT_DIR/Dockerfile.mxfp4" "$FIXTURE_DIR/"
+    cp -a "$PROJECT_DIR/docker" "$FIXTURE_DIR/"
     mkdir -p \
         "$FIXTURE_DIR/.wheel-cache/flashinfer/regular" \
         "$FIXTURE_DIR/.wheel-cache/flashinfer/custom" \
@@ -638,10 +639,17 @@ test_dockerfile_preserves_selected_sm12x_target() {
         "$PROJECT_DIR/Dockerfile" > "$sm12x_block"
     for expected in \
         'VLLM_PRESERVE_SM12X_TARGET="${VLLM_PRESERVE_SM12X_TARGET}"' \
-        '"7.5;8.0;8.6;8.7;8.9;9.0;10.0;11.0;12.0;12.1"' \
-        'Enabled selected SM12x target preservation for CUDA 13 vLLM build'; do
+        '/tmp/vllm-patches/patch_vllm_preserve_sm12x_target.py'; do
         if ! grep -Fq "$expected" "$sm12x_block"; then
             fail "Dockerfile SM12x build guard is missing: $expected"
+        fi
+    done
+    for expected in \
+        '"7.5;8.0;8.6;8.7;8.9;9.0;10.0;11.0;12.0;12.1"' \
+        'Enabled selected SM12x target preservation for CUDA 13 vLLM build'; do
+        if ! grep -Fq "$expected" \
+            "$PROJECT_DIR/docker/patch_vllm_preserve_sm12x_target.py"; then
+            fail "External SM12x patch is missing: $expected"
         fi
     done
     pass "B12X preserves the selected SM12x target under CUDA 13"
@@ -839,6 +847,38 @@ test_dockerfile_fetches_vllm_prs_from_upstream() {
     pass "vLLM PR patches are fetched from upstream when building a fork"
 }
 
+test_dockerfile_externalizes_vllm_source_patches() {
+    local patch_section="$TMP_BASE/vllm-source-patches"
+    local patch_count=0
+
+    sed -n '/COPY docker\/patch_vllm_\*\.py/,/# Prepare build requirements/p' \
+        "$PROJECT_DIR/Dockerfile" > "$patch_section"
+    if grep -Eq 'python3[[:space:]]+-[[:space:]]+<<' "$patch_section"; then
+        fail "Dockerfile still embeds a Python vLLM source patch"
+    fi
+
+    for patch_path in "$PROJECT_DIR"/docker/patch_vllm_*.py; do
+        patch_name="$(basename "$patch_path")"
+        patch_count=$((patch_count + 1))
+        if ! grep -Fq "/tmp/vllm-patches/$patch_name" "$patch_section"; then
+            fail "Dockerfile does not execute external patch: $patch_name"
+        fi
+    done
+    if [ "$patch_count" -ne 10 ]; then
+        fail "Expected 10 external vLLM patch scripts, found $patch_count"
+    fi
+    if ! python3 -c '
+from pathlib import Path
+import sys
+files = sorted(Path(sys.argv[1]).glob("patch_vllm_*.py"))
+for path in files:
+    compile(path.read_text(), str(path), "exec")
+' "$PROJECT_DIR/docker"; then
+        fail "An external vLLM patch script has invalid Python syntax"
+    fi
+    pass "Dockerfile externalizes every active vLLM source patch"
+}
+
 test_default_uses_prebuilt
 test_tf5_uses_prebuilt_tf5_tag
 test_custom_tag_uses_prebuilt_custom_tag
@@ -893,5 +933,6 @@ test_copied_vllm_git_index_is_refreshed_before_patch_apply
 test_dockerfile_applies_flashinfer_prs_without_merging_branch_history
 test_dockerfiles_pin_tvm_ffi_regression_version
 test_dockerfile_fetches_vllm_prs_from_upstream
+test_dockerfile_externalizes_vllm_source_patches
 
 echo "Passed $TESTS_PASSED build-and-copy tests."

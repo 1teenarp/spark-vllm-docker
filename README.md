@@ -149,6 +149,16 @@ For periodic maintenance, I recommend using a filter: `docker builder prune --fi
 
 ## CHANGELOG
 
+### 2026-08-06
+
+#### GLM-5.2 NVFP4 8x Spark cluster recipe
+
+Added the cluster-only `recipes/8x-spark-cluster/glm-5.2-nvfp4.yaml` recipe for serving `nvidia/GLM-5.2-NVFP4`. Requires 8x nodes. The recipe uses the `vllm-node-b12x` image.
+
+```bash
+./run-recipe.sh recipes/8x-spark-cluster/glm-5.2-nvfp4.yaml
+```
+
 ### 2026-08-03
 
 #### New B12x/SparkInfer image
