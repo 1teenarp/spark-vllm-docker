@@ -2195,6 +2195,8 @@ When `--non-privileged` is specified:
 
 All launch modes set Docker's open-file ulimit to `1048576`, which avoids loader failures when highly sharded models are opened in parallel by Ray workers. Override it with `VLLM_SPARK_NOFILE_LIMIT` if your host requires a different value.
 
+All launch modes also set `--ulimit memlock=-1:-1` on head and worker containers so NCCL/RDMA memory registration is not constrained by Docker's locked-memory limits. This does not increase the amount of available RAM or change container memory limits.
+
 These resource limits can be customized:
 ```bash
 ./launch-cluster.sh --non-privileged \
