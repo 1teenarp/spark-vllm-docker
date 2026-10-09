@@ -18,7 +18,7 @@ defaults:
   gpu_memory_utilization: 0.8
   max_model_len: 262144
   max_num_seqs: 8
-  max_num_batched_tokens: 16384
+  max_num_batched_tokens: 4096
   num_speculative_tokens: 8
 
 command: |
