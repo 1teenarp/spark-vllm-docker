@@ -60,12 +60,34 @@ Both tests had been inserted at the same location, which caused the October 9
 nightly to stop on a test-file conflict. The complete vLLM series was then
 replayed successfully against the failed nightly's base
 `59ffd73e8597d860730f4a8c4f778f27c75a0dfa` and current main
-`75e3b17c055c609f02c64cd4ad3f8692b8170d8e`. The runtime patch content and lane
-selection are unchanged. A CPU-only regression in
+`75e3b17c055c609f02c64cd4ad3f8692b8170d8e`. That test-only refresh left runtime
+patch content and lane selection unchanged. A CPU-only regression in
 `tests/test_regular_patch_series.py` checks that both tests survive application.
 
+Later on October 9, #50897 was refreshed to upstream head
+`92176bd44606a3cd5857b5fd05b739cbcc434daf`. The old snapshot registered Mamba
+tails at allocation but deferred full-block publication until step output.
+At a full-block checkpoint, that could publish the same boundary twice and
+trip `BlockPool.cache_full_blocks`'s `block_hash_num_tokens` assertion. The
+updated PR restores allocation-time caching, removes the publication fence
+and special Mamba-tail path, and only publishes the final lookahead block at
+request finish. It also includes the upstream multi-module MTP fallback and
+unified lookahead hasher.
+
+The full 14-patch vLLM series was replayed against upstream main
+`7d0b4e57aac4c4323225b0eee9ae960ce75ffffe`. Integration with the newer
+Mooncake fix [#60695](https://github.com/vllm-project/vllm/pull/60695) preserves
+explicit boundary puts, original prompt and resumed-prefill lengths, and
+references for asynchronous store jobs. Lookahead hashes replace the extra
+EAGLE proof margin for partial-tail saves too. Both sides of the overlapping
+MTP tests are retained, and the Mooncake tests cover lookahead partial tails.
+Focused CPU checks using extracted source methods reproduced the old cache
+assertion and passed with the refreshed source; save limits, tail-block
+references, and the build-selection tests also passed. Full inference
+validation remains with the next nightly CI run.
+
 The supplied conflict resolutions are retained, with adaptations for newer
-upstream Mamba cache-boundary and KV-transfer fixes (#60533 and #59197).
+upstream Mamba cache-boundary and KV-transfer fixes (#60533, #59197, and #60695).
 Lookahead hashing disables the EAGLE block drop while retaining the resolved
 cache-hit alignment and the one-token replay boundary. Both sets of tests/docs
 are preserved. Dynamic linear warmup keeps upstream's `round_up=True` and
