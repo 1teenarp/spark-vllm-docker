@@ -8,7 +8,7 @@ CONTAINER_WORKSPACE_DIR="/workspace"
 CONTAINER_EXEC_SCRIPT="$CONTAINER_WORKSPACE_DIR/exec-script.sh"
 # Modify these if you want to pass additional docker args or set VLLM_SPARK_EXTRA_DOCKER_ARGS variable
 DOCKER_ARGS="-e NCCL_IGNORE_CPU_AFFINITY=1"
-DOCKER_ARGS="$DOCKER_ARGS -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+# DOCKER_ARGS="$DOCKER_ARGS -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 DOCKER_ARGS="$DOCKER_ARGS -v $HF_CACHE_DIR:/root/.cache/huggingface"
 
 # Append additional arguments from environment variable

@@ -1975,7 +1975,7 @@ Assumptions and limitations:
 - It clears the Docker image entrypoint by default so images that define an entrypoint, such as `vllm-openai`, can still start as idle cluster containers before commands are executed. Use `--keep-entrypoint` to keep the image entrypoint.
 - Solo mode uses loopback for internal vLLM, NCCL, Gloo, and TensorPipe communication and disables NCCL RDMA, even when `.env` contains cluster interfaces or a cluster IP. This also applies when a single-node configuration automatically selects solo mode. Explicit `--eth-if` and container environment settings (`-e` or `CONTAINER_*`) can override these defaults. The API listening address is still controlled by `vllm serve --host`.
 - In solo mode, `-p` / `--publish` can be used to publish ports in Docker format, for example `-p 8000:8000`. When port publishing is used, the launcher does not use host networking. Port publishing is not supported in cluster mode.
-- It sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` in each container by default to reduce allocator fragmentation on DGX Spark. Override it with `-e PYTORCH_CUDA_ALLOC_CONF=<value>` when needed.
+- It leaves `PYTORCH_CUDA_ALLOC_CONF` unset by default. PyTorch defaults to `expandable_segments:False` while retaining normal memory caching. Opt in for workloads that benefit with `-e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, or set `PYTORCH_CUDA_ALLOC_CONF` in the recipe's `env` section.
 - It mounts `~/.cache/huggingface`, `~/.cache/vllm`, `~/.cache/flashinfer`, `~/.cache/b12x`, `~/.triton`, and `~/.tilelang` by default. Use `--no-cache-dirs` to skip the vLLM/FlashInfer/B12X/Triton/TileLang cache mounts. Add other mounts with repeatable Docker-style `-v` / `--volume` options, e.g. `-v "$HOME/my-data:/data"`.
 
 
