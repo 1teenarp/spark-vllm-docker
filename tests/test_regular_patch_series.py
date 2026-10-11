@@ -2,12 +2,15 @@
 """Exercise source-series application and lane guards without Docker or GPUs."""
 
 import ast
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -184,6 +187,152 @@ class PatchSeriesTests(unittest.TestCase):
                 self.assertEqual(
                     (self.source / "feature").read_text(), "first\n" if expected else "base\n"
                 )
+
+    def apply_upstream_excerpt(self, patch_name, path, fixture, hunk_terms=()):
+        target = self.source / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        upstream = (PROJECT / "tests/fixtures/qwen38-patch-series" / fixture).read_text()
+        target.write_text(upstream)
+        self.commit()
+        patch = (PROJECT / "docker/patches/qwen3.8/vllm" / patch_name).read_text()
+        section = next(
+            s for s in re.split(r"(?m)(?=^diff --git )", patch)
+            if s.startswith(f"diff --git a/{path} ")
+        )
+        if hunk_terms:
+            header, *hunks = re.split(r"(?m)(?=^@@ )", section)
+            selected = [h for h in hunks if any(term in h for term in hunk_terms)]
+            self.assertEqual(len(selected), len(hunk_terms))
+            section = header + "".join(selected)
+        (self.series / "excerpt.patch").write_text(section)
+        (self.series / "series").write_text("excerpt.patch\n")
+        result = self.apply()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        updated = target.read_text()
+        compile(updated, path, "exec")
+        return upstream, updated
+
+    def test_draft_head_refresh_preserves_native_mrv2_reload(self):
+        upstream, updated = self.apply_upstream_excerpt(
+            "02-pr59973.patch", "vllm/v1/worker/gpu/model_runner.py",
+            "mrv2_reload_upstream.py",
+        )
+        before = next(n for n in ast.parse(upstream).body if isinstance(n, ast.ClassDef))
+        after = next(n for n in ast.parse(updated).body if isinstance(n, ast.ClassDef))
+        # The native reload must survive unchanged, including all cache resets.
+        reload_before = next(n for n in before.body if n.name == "reload_weights")
+        reload_after = next(n for n in after.body if n.name == "reload_weights")
+        self.assertEqual(ast.dump(reload_before), ast.dump(reload_after))
+        events = []
+
+        class ReloadBase:
+            def reset_lora_state(self):
+                events.append("lora")
+
+        @contextmanager
+        def config_context(config):
+            events.append(("enter", config))
+            yield
+            events.append("exit")
+
+        reload = Mock(side_effect=lambda *args: events.append(("reload", args)))
+        refresh = Mock(side_effect=lambda draft: events.append(("refresh", draft)))
+        after.bases = [ast.Name(id="ReloadBase", ctx=ast.Load())]
+        after.body = [n for n in after.body if n.name != "get_draft_model"]
+        namespace = {
+            "ReloadBase": ReloadBase, "reload_weights": reload,
+            "set_current_vllm_config": config_context,
+            "refresh_quantized_lm_heads": refresh,
+        }
+        exec("from __future__ import annotations\n" + ast.unparse(after), namespace)
+        runner = namespace["GPUModelRunner"]()
+        runner.vllm_config = object()
+        model, draft, weights = object(), object(), [("weight", object())]
+        runner.get_model = lambda: model
+        runner.get_draft_model = lambda: draft
+        runner.reset_encoder_cache = lambda: events.append("encoder")
+        runner.reset_mm_cache = lambda: events.append("mm")
+        runner.reload_weights(weights, "new-checkpoint", False)
+        self.assertEqual(events, [
+            ("reload", (runner.vllm_config, model, weights, "new-checkpoint", False)),
+            "lora", ("enter", runner.vllm_config), ("refresh", draft),
+            "exit", "encoder", "mm",
+        ])
+        # Weight transfer reaches the same hook without invoking reload_weights.
+        events.clear()
+        runner.reset_lora_state()
+        self.assertEqual(events, [
+            "lora", ("enter", runner.vllm_config), ("refresh", draft), "exit",
+        ])
+        events.clear()
+        runner.get_draft_model = lambda: None
+        runner.reload_weights()
+        self.assertEqual(events[1:], ["lora", "encoder", "mm"])
+        events.clear()
+        reload.side_effect = ValueError("reload failed")
+        with self.assertRaisesRegex(ValueError, "reload failed"):
+            runner.reload_weights()
+        self.assertEqual(events, [])
+
+    def test_core_and_mooncake_retain_matching_replay_boundaries(self):
+        _, core = self.apply_upstream_excerpt(
+            "06-pr50897.patch", "vllm/v1/core/kv_cache_coordinator.py",
+            "replay_boundaries_upstream.py", ("use_eagle=bool(self.eagle_group_ids)",),
+        )
+        _, mooncake = self.apply_upstream_excerpt(
+            "06-pr50897.patch",
+            "vllm/distributed/kv_transfer/kv_connector/v1/mooncake/store/coordinator.py",
+            "mooncake_replay_upstream.py",
+            ("exclude_mamba: bool = False", "use_eagle=bool(self.eagle_group_ids)",
+             "use_eagle = g_idx in self.eagle_group_ids"),
+        )
+        mask = Mock(return_value=None)
+        namespace = {
+            "cdiv": lambda n, d: (n + d - 1) // d,
+            "_unwrap_spec": lambda spec: spec,
+            "MambaSpec": type("MambaSpec", (), {}),
+            "KVCacheSpecRegistry": SimpleNamespace(
+                get_manager_class=lambda _: SimpleNamespace(reachable_block_mask=mask)
+            ),
+        }
+        exec("from __future__ import annotations\n" + core + mooncake, namespace)
+        core_coord = namespace["KVCacheCoordinator"]()
+        core_coord.scheduler_block_size = 32
+        core_coord.retention_interval = 0
+        manager = SimpleNamespace(enable_caching=True, cache_blocks=Mock())
+        core_coord.single_type_managers = [manager]
+        core_coord.get_num_cacheable_tokens = lambda n, _: n
+        store_coord = namespace["MooncakeStoreCoordinator"]()
+        store_coord.enable_partial_hash_hits = False
+        store_coord.lcm_block_size = 32
+        store_coord.kv_cache_groups = [
+            SimpleNamespace(kv_cache_spec=SimpleNamespace(block_size=8))
+            for _ in range(2)
+        ]
+        for prompt, lookahead, eagle, expected in [
+            (100, False, True, (64,)), (96, False, True, (32, 64)),
+            (100, True, True, (99,)), (96, True, True, (95,)),
+            (100, False, False, (99,)), (96, False, False, (95,)),
+        ]:
+            with self.subTest(prompt=prompt, lookahead=lookahead, eagle=eagle):
+                groups = {0} if eagle else set()
+                core_coord.eagle_group_ids = store_coord.eagle_group_ids = groups
+                core_coord.use_lookahead_block_hashes = lookahead
+                core_coord.cache_blocks(SimpleNamespace(num_prompt_tokens=prompt), 96)
+                self.assertEqual(
+                    manager.cache_blocks.call_args.kwargs["replay_boundaries"], expected
+                )
+                mask.reset_mock()
+                store_coord._reachable_masks(
+                    96, 0, retention_interval=0, num_prompt_tokens=prompt,
+                    apply_eagle=not lookahead,
+                )
+                self.assertEqual(mask.call_count, 2)
+                for group, call in enumerate(mask.call_args_list):
+                    self.assertEqual(call.kwargs["reachable_boundaries"], expected)
+                    self.assertEqual(
+                        call.kwargs["use_eagle"], eagle and not lookahead and group == 0
+                    )
 
 
 if __name__ == "__main__":

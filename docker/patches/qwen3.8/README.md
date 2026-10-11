@@ -49,6 +49,27 @@ W4A4 MoE), then [#5943](https://github.com/flashinfer-ai/flashinfer/pull/5943)
 
 ## Integration and refresh
 
+On October 11, #59973 and #50897 were rebased after two upstream changes
+landed between validation and the nightly build. Their PR revisions are
+unchanged; the integration diffs now preserve:
+
+- [#60937](https://github.com/vllm-project/vllm/pull/60937)'s native MRV2 weight
+  reload implementation and cache resets, with quantized draft heads refreshed
+  through `reset_lora_state` after target reloads and weight transfers.
+- [#61012](https://github.com/vllm-project/vllm/pull/61012)'s shared
+  `replay_boundaries` helper. Core caching and Mooncake both disable EAGLE
+  back-off when lookahead hashes already prove the boundary, and retain the
+  upstream sliding-window tail fix when EAGLE block dropping applies.
+
+The complete 14-patch vLLM series and all 17 subsequent source patchers pass on
+the failed nightly base `2339bd39d661965b821bfbe652db8f536e0b3dcd` and current main
+`b99fdbe1f896abd7f4b133685a37397c3427f7d5`. All 117 changed Python files parse on
+both bases, and vocabulary packaging is intact. The 9 series tests (including
+CPU regressions for native reload and shared replay boundaries), 28 SWA tests,
+and 100 build-selection checks pass. GPU compilation and inference remain for
+nightly CI. Validation applies to these commits; builds that track moving main
+can encounter later upstream conflicts.
+
 All 16 patches were refreshed on October 10, 2026 against upstream vLLM
 `3c062d391d15cfa41d3f321cad24f3030c892a97` and FlashInfer
 `34bb66e4d0b420b5a03c99b2b6a1c0831dfaa738`. Each patch header records the full

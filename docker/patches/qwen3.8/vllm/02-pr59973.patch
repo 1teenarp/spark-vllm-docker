@@ -3,7 +3,10 @@ Subject: [PATCH] [MRV2][Spec Decode] Quantized draft lm_head for drafters that s
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59973
 Upstream-Commit: 0c2ed06ac005871507645ecc63e05a28058e15bf
-Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
+Integration-Base: 2339bd39d661965b821bfbe652db8f536e0b3dcd
+
+Preserve #60937's native MRV2 weight reload and cache resets. Keep the
+quantized draft-head refresh in reset_lora_state for reloads and transfers.
 
 diff --git a/docs/features/speculative_decoding/mtp.md b/docs/features/speculative_decoding/mtp.md
 index 3b637c9de8ad77fe2b7a2c360ff7ff0a4904094b..34d8f9539b74a7ef8edd8252f7244dc37be98d0e 100644
@@ -358,7 +361,7 @@ index 0000000000000000000000000000000000000000..11d9354d9a40a4a5565ea8b2d4958785
 +    for name, tensor in before.items():
 +        assert torch.equal(after[name], tensor), name
 diff --git a/tests/v1/worker/test_gpu_worker_weight_transfer.py b/tests/v1/worker/test_gpu_worker_weight_transfer.py
-index 49ef707894784acccafa86cf26811e9c35c50a66..84901da16f52e98106ffea076b08187d2dc34e02 100644
+index f1965cb1fae226bb55911f0c595b6c5f58b1d614..ff5acfb6d19e82ad96593c6a82dd1ec09c2ee55f 100644
 --- a/tests/v1/worker/test_gpu_worker_weight_transfer.py
 +++ b/tests/v1/worker/test_gpu_worker_weight_transfer.py
 @@ -61,6 +61,9 @@ class _RecordingModelRunner:
@@ -675,10 +678,10 @@ index be20c412438c9fc30bd4a008c7054e682494931f..ae5a8c3840048e37800715b9ab354731
          self.quant_config = quant_config
          if bias:
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index e04a381b94e63fbffc63845e824e0aadfa91efc0..1876ce28c62c06701b8a1205d9b290ca9d0514b2 100644
+index 20fa4c17bb07acc76cbae494843ed0c4b4758e11..dc7f0de80b62256d3f60dc2a0f1248f3d920d2dd 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
-@@ -32,7 +32,7 @@ import vllm.envs as envs
+@@ -33,7 +33,7 @@ import vllm.envs as envs
  from vllm.compilation.counter import compilation_counter
  from vllm.compilation.cuda_graph import CUDAGraphStat
  from vllm.compilation.wrapper import compile_model_with_stock_torch
@@ -687,7 +690,7 @@ index e04a381b94e63fbffc63845e824e0aadfa91efc0..1876ce28c62c06701b8a1205d9b290ca
  from vllm.config.compilation import CompilationMode, CUDAGraphMode
  from vllm.distributed.aux_output_connector.worker import (
      AuxOutputWorkerConnector,
-@@ -45,6 +45,9 @@ from vllm.model_executor.layers.fused_moe.all2all_utils import get_ep_all2all_ma
+@@ -46,6 +46,9 @@ from vllm.model_executor.layers.fused_moe.all2all_utils import get_ep_all2all_ma
  from vllm.model_executor.layers.mamba.ops.ssu_dispatch import (
      initialize_mamba_ssu_backend,
  )
@@ -695,9 +698,9 @@ index e04a381b94e63fbffc63845e824e0aadfa91efc0..1876ce28c62c06701b8a1205d9b290ca
 +    refresh_quantized_lm_heads,
 +)
  from vllm.model_executor.model_loader import get_model_loader
+ from vllm.model_executor.model_loader.reload.inplace import reload_weights
  from vllm.model_executor.models.interfaces import requires_raw_input_tokens
- from vllm.model_executor.offloader import (
-@@ -563,6 +566,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -565,6 +568,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              return None
          return speculator.model
  
@@ -710,9 +713,9 @@ index e04a381b94e63fbffc63845e824e0aadfa91efc0..1876ce28c62c06701b8a1205d9b290ca
 +            with set_current_vllm_config(self.vllm_config):
 +                refresh_quantized_lm_heads(draft_model)
 +
-     def reload_weights(self, *args, **kwargs) -> None:
-         # TODO(Wentao): Use full version instead of import when fully migrated to v2
-         from vllm.v1.worker.gpu_model_runner import GPUModelRunner as GPUModelRunnerV1
+     def reload_weights(
+         self,
+         weights_iterator: Iterable[tuple[str, torch.Tensor]] | None = None,
 diff --git a/vllm/v1/worker/gpu/spec_decode/eagle/utils.py b/vllm/v1/worker/gpu/spec_decode/eagle/utils.py
 index 65289bb18e6af0ad4b8ef84968b2ed03fd6a70f8..63e999b75fbfa7278fece3bf1d80a595376c7cef 100644
 --- a/vllm/v1/worker/gpu/spec_decode/eagle/utils.py
@@ -757,10 +760,10 @@ index 65289bb18e6af0ad4b8ef84968b2ed03fd6a70f8..63e999b75fbfa7278fece3bf1d80a595
      # MTP shares topk_indices_buffer with the target model. We update
      # every module in the draft that holds a buffer reference so that
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index a01e5dd5f7a3e28ac474f2f2281213b83c32145d..44877e2f4f49fb0169c50f58cca1bc0907c9e2e1 100644
+index 152def62221cefd2b2b2ba68b5b6cb0469e811bf..1a1cc1e3a55472b0cf729993c6ff450c74251101 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
-@@ -57,6 +57,10 @@ from vllm.distributed.weight_transfer import (
+@@ -62,6 +62,10 @@ from vllm.distributed.weight_transfer import (
  )
  from vllm.logger import init_logger
  from vllm.lora.request import LoRARequest
@@ -771,7 +774,7 @@ index a01e5dd5f7a3e28ac474f2f2281213b83c32145d..44877e2f4f49fb0169c50f58cca1bc09
  from vllm.model_executor.model_loader import get_model_loader
  from vllm.model_executor.model_loader.weight_checksum import (
      compute_tensor_digests,
-@@ -1495,12 +1499,19 @@ class Worker(WorkerBase):
+@@ -1515,12 +1519,19 @@ class Worker(WorkerBase):
                  "active. Call finish_weight_update first."
              )
  
@@ -791,7 +794,7 @@ index a01e5dd5f7a3e28ac474f2f2281213b83c32145d..44877e2f4f49fb0169c50f58cca1bc09
              raise
          self._weight_update_active = True
          self._weight_update_is_draft = is_draft
-@@ -1540,6 +1551,10 @@ class Worker(WorkerBase):
+@@ -1560,6 +1571,10 @@ class Worker(WorkerBase):
              except BaseException:
                  self._weight_update_active = False
                  self.weight_transfer_engine.reset_weight_update_target()
@@ -802,7 +805,7 @@ index a01e5dd5f7a3e28ac474f2f2281213b83c32145d..44877e2f4f49fb0169c50f58cca1bc09
                  raise
  
      def finish_weight_update(self) -> None:
-@@ -1556,6 +1571,10 @@ class Worker(WorkerBase):
+@@ -1576,6 +1591,10 @@ class Worker(WorkerBase):
              self.weight_transfer_engine.finish_weight_update()
              self.weight_transfer_engine.reset_weight_update_target()
              self._weight_update_active = False
