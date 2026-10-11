@@ -2,6 +2,8 @@ From: stecasta
 Subject: [PATCH] [MRV2][Spec Decode] Quantized draft lm_head for drafters that share the target head
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59973
+Upstream-Commit: 0c2ed06ac005871507645ecc63e05a28058e15bf
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
 
 diff --git a/docs/features/speculative_decoding/mtp.md b/docs/features/speculative_decoding/mtp.md
 index 3b637c9de8ad77fe2b7a2c360ff7ff0a4904094b..34d8f9539b74a7ef8edd8252f7244dc37be98d0e 100644
@@ -408,10 +410,10 @@ index 4c61ead82dabdddef79eea4d77558fd260cd7b8d..4b63b36bd5f5116e25882ff9e5447002
              raise ValueError(
                  "Expected num_speculative_tokens to be greater "
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index 5d38b6765308fb95cccb72606199fb0de37c5e7a..d22adbe3b5e2f3a5249beaa21fcfaf27fc5bb76a 100644
+index b4298cd145b8e02892d38f1bb2a5687544d68f9b..b6ee590b0397f2419310a724910c1ed4ddffa71d 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
-@@ -3034,6 +3034,8 @@ class VllmConfig:
+@@ -3004,6 +3004,8 @@ class VllmConfig:
                  unsupported.append("dspark speculative decoding")
              if self.speculative_config.enable_adaptive_verification:
                  unsupported.append("adaptive draft verification")
@@ -673,7 +675,7 @@ index be20c412438c9fc30bd4a008c7054e682494931f..ae5a8c3840048e37800715b9ab354731
          self.quant_config = quant_config
          if bias:
 diff --git a/vllm/v1/worker/gpu/model_runner.py b/vllm/v1/worker/gpu/model_runner.py
-index 61d6197ceb9d41f05d70a3b3a6f9ad46f4ca1826..227529d56e6e7fac0488c9eafa1a425f78068829 100644
+index e04a381b94e63fbffc63845e824e0aadfa91efc0..1876ce28c62c06701b8a1205d9b290ca9d0514b2 100644
 --- a/vllm/v1/worker/gpu/model_runner.py
 +++ b/vllm/v1/worker/gpu/model_runner.py
 @@ -32,7 +32,7 @@ import vllm.envs as envs
@@ -695,7 +697,7 @@ index 61d6197ceb9d41f05d70a3b3a6f9ad46f4ca1826..227529d56e6e7fac0488c9eafa1a425f
  from vllm.model_executor.model_loader import get_model_loader
  from vllm.model_executor.models.interfaces import requires_raw_input_tokens
  from vllm.model_executor.offloader import (
-@@ -554,6 +557,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
+@@ -563,6 +566,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
              return None
          return speculator.model
  
@@ -755,7 +757,7 @@ index 65289bb18e6af0ad4b8ef84968b2ed03fd6a70f8..63e999b75fbfa7278fece3bf1d80a595
      # MTP shares topk_indices_buffer with the target model. We update
      # every module in the draft that holds a buffer reference so that
 diff --git a/vllm/v1/worker/gpu_worker.py b/vllm/v1/worker/gpu_worker.py
-index f2dfc8a689f07c5c79b50d36fe99f9248f95594f..fa464538bc058d9b82e56dac782258d99fe6fe3c 100644
+index a01e5dd5f7a3e28ac474f2f2281213b83c32145d..44877e2f4f49fb0169c50f58cca1bc0907c9e2e1 100644
 --- a/vllm/v1/worker/gpu_worker.py
 +++ b/vllm/v1/worker/gpu_worker.py
 @@ -57,6 +57,10 @@ from vllm.distributed.weight_transfer import (
@@ -769,7 +771,7 @@ index f2dfc8a689f07c5c79b50d36fe99f9248f95594f..fa464538bc058d9b82e56dac782258d9
  from vllm.model_executor.model_loader import get_model_loader
  from vllm.model_executor.model_loader.weight_checksum import (
      compute_tensor_digests,
-@@ -1493,12 +1497,19 @@ class Worker(WorkerBase):
+@@ -1495,12 +1499,19 @@ class Worker(WorkerBase):
                  "active. Call finish_weight_update first."
              )
  
@@ -789,7 +791,7 @@ index f2dfc8a689f07c5c79b50d36fe99f9248f95594f..fa464538bc058d9b82e56dac782258d9
              raise
          self._weight_update_active = True
          self._weight_update_is_draft = is_draft
-@@ -1538,6 +1549,10 @@ class Worker(WorkerBase):
+@@ -1540,6 +1551,10 @@ class Worker(WorkerBase):
              except BaseException:
                  self._weight_update_active = False
                  self.weight_transfer_engine.reset_weight_update_target()
@@ -800,7 +802,7 @@ index f2dfc8a689f07c5c79b50d36fe99f9248f95594f..fa464538bc058d9b82e56dac782258d9
                  raise
  
      def finish_weight_update(self) -> None:
-@@ -1554,6 +1569,10 @@ class Worker(WorkerBase):
+@@ -1556,6 +1571,10 @@ class Worker(WorkerBase):
              self.weight_transfer_engine.finish_weight_update()
              self.weight_transfer_engine.reset_weight_update_target()
              self._weight_update_active = False

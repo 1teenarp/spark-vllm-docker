@@ -2,16 +2,27 @@ From: stecasta
 Subject: [PATCH] [Qwen4Exp] NVFP4 PLE tables for host_file_gather
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59958
+Upstream-Commit: 2231f31b6043096595e5070d52a5df2685e3efec
+Upstream-PR: https://github.com/vllm-project/vllm/pull/56273
+Upstream-Commit: 39b27f1e7771eb83c7008e0df0c36fb9500761c3
+Upstream-PR: https://github.com/vllm-project/vllm/pull/58815
+Upstream-Commit: a7ebbe5fa1fe5984e4d0f1f2d65ab3501d6ba9ac
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
+
+Includes the current NVFP4 PLE and host-file-gather dependencies.
+Keep the shared row decoder and file binding when applying #56273. All
+storage paths pass byte-view block scales; dummy file-gather loads still
+bind their staging buffers.
 
 diff --git a/.buildkite/test_areas/models_basic.yaml b/.buildkite/test_areas/models_basic.yaml
-index a25c9a78a86cfe8539227f7b17e98c107a7bfdb2..b7c9b2d04358dc0830f03635d132c7580a19ab66 100644
+index 483a9aceac22a53b2e329481f8bfa12816f77684..c8af005ece97ff4bae785a4d5e8414c5a04205f7 100644
 --- a/.buildkite/test_areas/models_basic.yaml
 +++ b/.buildkite/test_areas/models_basic.yaml
-@@ -208,6 +208,7 @@ steps:
+@@ -211,6 +211,7 @@ steps:
    - tests/models/qwen4_exp/
    commands:
      - pytest -v -s models/qwen4_exp/test_hc_ops.py models/qwen4_exp/test_qsa_prepare.py models/qwen4_exp/test_qsa_reference.py
-+    - pytest -v -s models/qwen4_exp/test_ple.py -k nvfp4
++    - pytest -v -s models/qwen4_exp/test_ple.py
    mirror:
      amd:
        label: ":amd: (MI355 DPX) Qwen4 Exp"
@@ -131,7 +142,7 @@ index 6fde77eda2469262ad188714b198c55d8daa90ab..fb4dbc3c3703a73360953bde79c109d0
      model_state = object.__new__(Qwen4ExpModelState)
      model_state.uses_ngram_embedding = True
 diff --git a/tests/models/qwen4_exp/test_ple.py b/tests/models/qwen4_exp/test_ple.py
-index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc3ec48719 100644
+index d7ee461d8f0dc6b54c45d875983bc1114767eb17..31f4916b5d26cfd6676260f6193d61f792566eda 100644
 --- a/tests/models/qwen4_exp/test_ple.py
 +++ b/tests/models/qwen4_exp/test_ple.py
 @@ -1,13 +1,18 @@
@@ -161,7 +172,17 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
  from tests.v1.attention.utils import BatchSpec, create_common_attn_metadata
  from vllm.config import SpeculativeConfig, VllmConfig
  from vllm.config.compilation import CUDAGraphMode
-@@ -40,7 +46,9 @@ from vllm.models.qwen4_exp.nvidia.ngram_embedding import (
+@@ -27,6 +33,9 @@ from vllm.model_executor.layers.quantization.modelopt import (
+ )
+ from vllm.model_executor.layers.quantization.online.base import OnlineQuantizationConfig
+ from vllm.model_executor.layers.quantization.quark.quark import QuarkConfig
++from vllm.model_executor.layers.quantization.utils.nvfp4_emulation_utils import (
++    _e4m3_inline,
++)
+ from vllm.models.qwen4_exp.amd import ple_layer as amd_ple_layer
+ from vllm.models.qwen4_exp.amd.ple_layer import (
+     Qwen4ExpPLELayer as Qwen4ExpPLELayerAMD,
+@@ -40,12 +49,15 @@ from vllm.models.qwen4_exp.nvidia.ngram_embedding import (
      Qwen4ExpNGramEmbedding,
      Qwen4ExpPLEDeviceEmbedding,
      Qwen4ExpPLEEmbeddingMethod,
@@ -171,7 +192,13 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
      Qwen4ExpPLEPinnedHostEmbedding,
      Qwen4ExpPLEUnquantizedEmbeddingMethod,
  )
-@@ -174,9 +182,10 @@ def _mock_etp_group(
+ from vllm.models.qwen4_exp.nvidia.ple_layer import Qwen4ExpPLELayer
+ from vllm.platforms import current_platform
++from vllm.triton_utils import tl, triton
+ from vllm.utils.torch_utils import weak_ref_tensor
+ from vllm.v1.attention.backends.short_conv_attn import (
+     PleShortConvAttentionMetadata,
+@@ -174,9 +186,10 @@ def _mock_etp_group(
      monkeypatch: pytest.MonkeyPatch,
      world_size: int = 1,
      all_reduce=lambda tensor: tensor,
@@ -183,7 +210,7 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
          world_size=world_size,
          all_reduce=all_reduce,
      )
-@@ -325,6 +334,215 @@ def test_ngram_embedding_loads_fp8_shards_and_global_scale() -> None:
+@@ -325,6 +338,269 @@ def test_ngram_embedding_loads_fp8_shards_and_global_scale() -> None:
      )
  
  
@@ -289,6 +316,60 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
 +        layer.weight_scale_2.data.fill_(scale)
 +    with pytest.raises(ValueError, match="finite positive global scale"):
 +        layer.embedding_method.process_weights_after_loading(layer)
++
++
++def test_nvfp4_ple_skips_load_checks_for_dummy_weights(monkeypatch):
++    """--load-format dummy never calls load_weights, so nothing is validated."""
++    monkeypatch.setattr(
++        ngram_embedding_module,
++        "get_current_vllm_config_or_none",
++        lambda: SimpleNamespace(load_config=SimpleNamespace(load_format="dummy")),
++    )
++    module, _, _, _ = _make_nvfp4_ngram_embedding(monkeypatch)
++    layer = module.ngram_embedding
++    layer.embedding_method.process_weights_after_loading(layer)
++
++
++@triton.jit
++def _decode_e4m3_kernel(src, dst, BLOCK: tl.constexpr):
++    offsets = tl.arange(0, BLOCK)
++    tl.store(dst + offsets, _e4m3_inline(tl.load(src + offsets)))
++
++
++@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
++def test_e4m3_inline_matches_torch_for_every_byte():
++    src = torch.arange(256, dtype=torch.int32).to(torch.uint8).cuda()
++    out = torch.empty(256, dtype=torch.float32, device="cuda")
++    _decode_e4m3_kernel[(1,)](src, out, BLOCK=256)
++    expected = src.view(torch.float8_e4m3fn).float()
++    torch.testing.assert_close(out, expected, rtol=0, atol=0, equal_nan=True)
++
++
++def test_amd_rejects_nvfp4_ple(monkeypatch):
++    _mock_etp_group(monkeypatch)
++    config = Qwen4ExpTextConfig(
++        ngram_size=3,
++        heads_per_ngram=1,
++        ngram_vocab_size_base=5,
++        make_ngram_vocab_size_divisible_by=8,
++        split_ngram_parts=2,
++        ple_embed_dim=32,
++        eos_token_id=0,
++        vocab_size=64,
++    )
++    config.ple_embedding_dtype = "nvfp4"
++    with pytest.raises(NotImplementedError, match="not supported on ROCm"):
++        amd_ple_layer.Qwen4ExpNGramEmbedding(
++            config,
++            embedding_dim=config.ple_embed_dim,
++            ple_dense_layer_id=0,
++            max_total_tokens=4,
++            max_num_reqs=2,
++            prefix="test.ple_embedding",
++            layer_name="test.ple",
++            quant_config=None,
++            params_dtype=torch.bfloat16,
++        )
 +
 +
 +@pytest.mark.parametrize("suffix", ["weight", "weight_scale"])
@@ -399,7 +480,7 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
  @pytest.mark.parametrize(("dp_rank", "local_tokens"), [(0, 2), (1, 3)])
  def test_etp_lookup_gathers_and_returns_dp_local_rows(
      monkeypatch: pytest.MonkeyPatch,
-@@ -611,6 +829,13 @@ def test_ple_embedding_dtype_overrides_modelopt_exclusion() -> None:
+@@ -611,6 +887,13 @@ def test_ple_embedding_dtype_overrides_modelopt_exclusion() -> None:
      )
  
  
@@ -413,7 +494,7 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
  def test_pinned_embedding_forward_finalizes_prefetched_output(
      monkeypatch: pytest.MonkeyPatch,
  ) -> None:
-@@ -852,7 +1077,7 @@ def test_ple_fp8_embedding_supports_mixed_precision_config() -> None:
+@@ -852,7 +1135,7 @@ def test_ple_fp8_embedding_supports_mixed_precision_config() -> None:
                  "quantized_layers": {
                      prefix: {"quant_algo": "FP8"},
                      "model.language_model.layers.2.moe.gate_proj": {
@@ -422,7 +503,7 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
                      },
                  },
              }
-@@ -872,6 +1097,433 @@ def test_ple_fp8_embedding_supports_mixed_precision_config() -> None:
+@@ -872,6 +1155,433 @@ def test_ple_fp8_embedding_supports_mixed_precision_config() -> None:
      )
  
  
@@ -857,10 +938,10 @@ index d7ee461d8f0dc6b54c45d875983bc1114767eb17..4539e3e3fb34bc0bb58569bf9feaa2cc
      conv_state_len = 6
      dilation = 2
 diff --git a/tests/test_config.py b/tests/test_config.py
-index ebf76c76a0c6609885af5449dce67bfbb9a9bc14..d5a46ee60a4b44f8af76696b77123aac1398dc64 100644
+index 734253edc9f8a36c344d3977ad1fca518988eba8..37633338b027cb42ea3345711d575187fb83a5c3 100644
 --- a/tests/test_config.py
 +++ b/tests/test_config.py
-@@ -1631,7 +1631,9 @@ def test_engram_tensor_parallel_size(dp_size: int, across_dp: bool, expected: in
+@@ -1568,7 +1568,9 @@ def test_engram_tensor_parallel_size(dp_size: int, across_dp: bool, expected: in
      assert config.get_parallel_size(parallel) == expected
  
  
@@ -871,7 +952,7 @@ index ebf76c76a0c6609885af5449dce67bfbb9a9bc14..d5a46ee60a4b44f8af76696b77123aac
  def test_engram_rejects_elastic_cross_dp(option):
      parallel = ParallelConfig(
          tensor_parallel_size=4,
-@@ -1855,12 +1857,46 @@ def test_engram_draft_config_validates_target(monkeypatch, target_has_ple, expli
+@@ -1792,12 +1794,46 @@ def test_engram_draft_config_validates_target(monkeypatch, target_has_ple, expli
              assert config.engram_config.cpu_offload is True
  
  
@@ -955,22 +1036,82 @@ index 7a7ed8f277ef794791579e2767dd6f9b2493642c..16113760c553cea2b20617e13620bf63
  
      def get_parallel_size(self, parallel_config: "ParallelConfig") -> int:
          """Derive the embedding group size from the parallel configuration."""
+diff --git a/vllm/model_executor/layers/quantization/utils/nvfp4_emulation_utils.py b/vllm/model_executor/layers/quantization/utils/nvfp4_emulation_utils.py
+index a66d481159fa76d2c02c90baf20771fbef5326a5..568ae3fd1ba72a3dcf5775c34bf6fd2250bb89e3 100644
+--- a/vllm/model_executor/layers/quantization/utils/nvfp4_emulation_utils.py
++++ b/vllm/model_executor/layers/quantization/utils/nvfp4_emulation_utils.py
+@@ -45,6 +45,22 @@ def _e2m1_inline(nibble):
+     return tl.where(sign == 1, -val, val)
+ 
+ 
++@triton.jit
++def _e4m3_inline(byte):
++    """Decode an FP8 E4M3FN byte to float32 without an FP8 pointer type.
++
++    Typed FP8 loads need SM89+ in Triton; reading the scale as uint8 and
++    decoding here keeps the caller portable.
++    """
++    bits = byte.to(tl.int32)
++    exponent = (bits >> 3) & 0xF
++    mantissa = (bits & 0x7).to(tl.float32)
++    normal = (1.0 + mantissa * 0.125) * tl.exp2((exponent - 7).to(tl.float32))
++    val = tl.where(exponent == 0, mantissa * 0.001953125, normal)
++    val = tl.where((bits & 0x7F) == 0x7F, float("nan"), val)
++    return tl.where((bits & 0x80) != 0, -val, val)
++
++
+ @triton.jit
+ def _nvfp4_gathered_bias_kernel(
+     markov_ptr,
+diff --git a/vllm/models/qwen4_exp/amd/ple_layer.py b/vllm/models/qwen4_exp/amd/ple_layer.py
+index fbc07b73ddf8e6f7e79ac19ec4214f62d55c3dd0..30595df32d881de4da150e78dbc11f0be9dd8c1a 100644
+--- a/vllm/models/qwen4_exp/amd/ple_layer.py
++++ b/vllm/models/qwen4_exp/amd/ple_layer.py
+@@ -32,6 +32,7 @@ from vllm.v1.attention.backends.short_conv_attn import (
+ from ..common.ngram_embedding import (
+     Qwen4ExpPLEDeviceEmbedding,
+     Qwen4ExpPLEEmbeddingMethod,
++    Qwen4ExpPLENvFp4EmbeddingMethod,
+     Qwen4ExpPLEPinnedHostEmbedding,
+ )
+ from ..common.ops.ple import ple_conv, ple_gate, ple_ngram_ids
+@@ -241,6 +242,11 @@ class Qwen4ExpNGramEmbedding(nn.Module):
+             embedding_prefix,
+             getattr(config, "ple_embedding_dtype", None),
+         )
++        if isinstance(embedding_quant_method, Qwen4ExpPLENvFp4EmbeddingMethod):
++            raise NotImplementedError(
++                "NVFP4 Qwen4Exp PLE tables are not supported on ROCm yet; use a "
++                "checkpoint with a BF16 or FP8 PLE table."
++            )
+         engram_config = get_current_vllm_config().engram_config
+         embedding_cls = (
+             Qwen4ExpPLEPinnedHostEmbedding
 diff --git a/vllm/models/qwen4_exp/common/ngram_embedding.py b/vllm/models/qwen4_exp/common/ngram_embedding.py
-index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab61f70719 100644
+index 6dad6b7b5afe8681542d599b37afa58b657c8119..40904cdbd684916c94603e9d3e8849beb6ddc391 100644
 --- a/vllm/models/qwen4_exp/common/ngram_embedding.py
 +++ b/vllm/models/qwen4_exp/common/ngram_embedding.py
-@@ -36,6 +36,10 @@ from vllm.model_executor.layers.quantization.quark.quark import QuarkConfig
+@@ -16,6 +16,7 @@ import torch.nn.functional as F
+ from torch import nn
+ 
+ from vllm.compilation.breakable_cudagraph import eager_break_during_capture
++from vllm.config import get_current_vllm_config_or_none
+ from vllm.distributed import get_dp_group, get_etp_group, get_tp_group
+ from vllm.forward_context import DPMetadata, get_forward_context
+ from vllm.logger import init_logger
+@@ -36,6 +37,11 @@ from vllm.model_executor.layers.quantization.quark.quark import QuarkConfig
  from vllm.model_executor.layers.quantization.utils.fp8_utils import (
      create_fp8_scale_parameter,
  )
 +from vllm.model_executor.layers.quantization.utils.nvfp4_emulation_utils import (
 +    _e2m1_inline,
++    _e4m3_inline,
 +    dequantize_to_dtype,
 +)
  from vllm.model_executor.layers.quantization.utils.quant_utils import (
      is_layer_skipped,
  )
-@@ -48,13 +52,13 @@ from vllm.triton_utils import tl, triton
+@@ -48,13 +54,13 @@ from vllm.triton_utils import tl, triton
  from vllm.utils.platform_utils import is_uva_available
  from vllm.utils.torch_utils import get_accelerator_view_from_cpu_tensor
  
@@ -986,7 +1127,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
  
      supports_prefetch: ClassVar[bool] = False
  
-@@ -163,9 +167,9 @@ class Qwen4ExpPLEEmbedding(PLEVocabParallelEmbedding, ABC):
+@@ -163,9 +169,9 @@ class Qwen4ExpPLEEmbedding(PLEVocabParallelEmbedding, ABC):
  
  
  class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
@@ -998,7 +1139,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
      requires_device_loading: bool = False
  
      @staticmethod
-@@ -175,13 +179,23 @@ class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
+@@ -175,13 +181,23 @@ class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
          embedding_dtype: str | None = None,
      ) -> "Qwen4ExpPLEEmbeddingMethod":
          """Select the concrete PLE embedding format for a layer."""
@@ -1023,7 +1164,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
              return Qwen4ExpPLEUnquantizedEmbeddingMethod()
          if isinstance(
              quant_config, ModelOptQuantConfigBase
-@@ -235,6 +249,33 @@ class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
+@@ -235,6 +251,34 @@ class Qwen4ExpPLEEmbeddingMethod(QuantizeMethodBase):
      def embedding(self, layer: nn.Module, input_: torch.Tensor) -> torch.Tensor:
          return F.embedding(input_, layer.weight)
  
@@ -1038,14 +1179,15 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
 +        output: torch.Tensor,
 +    ) -> None:
 +        """Copy the ETP-owned rows for ``ids`` from pinned host memory."""
++        row_bytes = layer.embedding_dim * layer.weight.element_size()
 +        _lookup_ple_embedding_from_pinned_kernel[(ids.numel(),)](
 +            layer._uva_weight,
 +            ids,
 +            output,
-+            layer._row_bytes,
++            row_bytes,
 +            layer.shard_indices.org_vocab_start_index,
 +            layer.shard_indices.org_vocab_end_index,
-+            BLOCK_D=layer._block_d,
++            BLOCK_D=triton.next_power_of_2(row_bytes),
 +        )
 +
 +    def process_weights_after_loading(self, layer: nn.Module) -> None:
@@ -1057,7 +1199,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
      @abstractmethod
      def dequantize(
          self,
-@@ -324,6 +365,7 @@ class Qwen4ExpPLEFp8EmbeddingMethod(Qwen4ExpPLEEmbeddingMethod):
+@@ -324,6 +368,7 @@ class Qwen4ExpPLEFp8EmbeddingMethod(Qwen4ExpPLEEmbeddingMethod):
          sentinel = torch.finfo(torch.float32).min
          if torch.any(layer.weight_scale == sentinel):
              raise ValueError("FP8 PLE checkpoint is missing its global scale")
@@ -1065,7 +1207,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
  
      def dequantize(
          self,
-@@ -339,6 +381,237 @@ class Qwen4ExpPLEFp8EmbeddingMethod(Qwen4ExpPLEEmbeddingMethod):
+@@ -339,6 +384,248 @@ class Qwen4ExpPLEFp8EmbeddingMethod(Qwen4ExpPLEEmbeddingMethod):
          return embeddings.to(output_dtype) * weight_scale.to(output_dtype)
  
  
@@ -1087,6 +1229,10 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
 +            "weight": set(),
 +            "weight_scale": set(),
 +        }
++        vllm_config = get_current_vllm_config_or_none()
++        self._dummy_load = (
++            vllm_config is not None and vllm_config.load_config.load_format == "dummy"
++        )
 +
 +    def create_weights(
 +        self,
@@ -1159,6 +1305,11 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
 +
 +    def process_weights_after_loading(self, layer: nn.Module) -> None:
 +        """Reject a missing global scale and any local rows left unloaded."""
++        if self._dummy_load:
++            # Dummy weights never go through load_weights. File-gather tables
++            # still need to bind their zero-filled staging buffers.
++            super().process_weights_after_loading(layer)
++            return
 +        scale = layer.weight_scale_2
 +        if not torch.all(torch.isfinite(scale) & (scale > 0)):
 +            raise ValueError(
@@ -1226,7 +1377,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
 +        if ids.numel():
 +            _lookup_nvfp4_ple_embedding_kernel[(ids.numel(),)](
 +                weight,
-+                weight_scale,
++                weight_scale.view(torch.uint8),
 +                weight_scale_2,
 +                ids,
 +                output,
@@ -1276,7 +1427,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
 +    BLOCK_D: tl.constexpr,
 +):
 +    """Decode owned NVFP4 PLE rows; write zeros for rows another rank owns."""
-+    row = tl.program_id(0)
++    row = tl.program_id(0).to(tl.int64)
 +    idx = tl.load(ids_ptr + row).to(tl.int64)
 +    owned = (idx >= vocab_start) & (idx < vocab_end)
 +    local_idx = tl.where(owned, idx - vocab_start, 0)
@@ -1290,11 +1441,13 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
 +    )
 +    # The low nibble holds the even element and the high nibble the odd one.
 +    codes = (packed >> ((offsets % 2) * 4)) & 0xF
-+    scales = tl.load(
-+        scale_ptr + local_idx * (embedding_dim // 16) + offsets // 16,
-+        mask=mask,
-+        other=0.0,
-+    ).to(tl.float32)
++    scales = _e4m3_inline(
++        tl.load(
++            scale_ptr + local_idx * (embedding_dim // 16) + offsets // 16,
++            mask=mask,
++            other=0,
++        )
++    )
 +    global_scale = tl.load(global_scale_ptr).to(tl.float32)
 +    values = _e2m1_inline(codes) * scales * global_scale
 +    tl.store(output_ptr + row * embedding_dim + offsets, values, mask=in_row)
@@ -1303,7 +1456,16 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
  class Qwen4ExpPLEDeviceEmbedding(Qwen4ExpPLEEmbedding):
      """PLE table allocated on the active model device."""
  
-@@ -466,35 +739,28 @@ class Qwen4ExpPLEPinnedHostEmbedding(Qwen4ExpPLEEmbedding):
+@@ -437,8 +724,6 @@ class Qwen4ExpPLEPinnedHostEmbedding(Qwen4ExpPLEEmbedding):
+             data_parallel_rank=data_parallel_rank,
+         )
+         self._uva_weight = get_accelerator_view_from_cpu_tensor(self.weight)
+-        self._row_bytes = self.embedding_dim * self.weight.element_size()
+-        self._block_d = triton.next_power_of_2(self._row_bytes)
+         self._prefetch_stream: torch.cuda.Stream | None = None
+         self._prefetch_buffer: torch.Tensor | None = None
+         self._prefetch_alloc_lock = threading.Lock()
+@@ -466,35 +751,28 @@ class Qwen4ExpPLEPinnedHostEmbedding(Qwen4ExpPLEEmbedding):
          input_ids: torch.Tensor,
          output: torch.Tensor | None = None,
      ) -> torch.Tensor:
@@ -1345,7 +1507,7 @@ index 6dad6b7b5afe8681542d599b37afa58b657c8119..24f5eed7a7ef0cbcd95189b9cb5106ab
          return output
  
      def sync_lookup(self, ngram_ids: torch.Tensor) -> torch.Tensor:
-@@ -548,7 +814,7 @@ class Qwen4ExpPLEPinnedHostEmbedding(Qwen4ExpPLEEmbedding):
+@@ -548,7 +826,7 @@ class Qwen4ExpPLEPinnedHostEmbedding(Qwen4ExpPLEEmbedding):
                          self._prefetch_rows,
                          self._num_ngram_heads,
                          self.embedding_dim,

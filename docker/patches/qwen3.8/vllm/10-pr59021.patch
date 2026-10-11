@@ -2,6 +2,8 @@ From: schopde-nvidia
 Subject: [PATCH] [Kernel] Allow steering the unquantized linear backend independently
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59021
+Upstream-Commit: 0d1a683a3471ce352ef5a9aa2d7a9616bd1ac4bf
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
 
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
 index 1f187b09f784f8f3d6f46c180f9e5542d43ecc33..7b37dc32abb0eb57eaa8b7b0d9be262e38ced9d9 100644
@@ -29,7 +31,7 @@ index 1f187b09f784f8f3d6f46c180f9e5542d43ecc33..7b37dc32abb0eb57eaa8b7b0d9be262e
      def _normalize_linear_backend(cls, value: Any) -> Any:
          if isinstance(value, str):
 diff --git a/vllm/engine/arg_utils.py b/vllm/engine/arg_utils.py
-index 5f32ec8deb9f595492d0c5155e34b745e7aa49b4..5ce1c1fae00ca3bbf213532f5999d279794389ba 100644
+index 31777e266f8be21f06a99ecdc256edd5dbff970e..ec86d47f20228d1336a4a81fbfd2320368e0f7d4 100644
 --- a/vllm/engine/arg_utils.py
 +++ b/vllm/engine/arg_utils.py
 @@ -548,6 +548,9 @@ class EngineArgs:
@@ -42,7 +44,7 @@ index 5f32ec8deb9f595492d0c5155e34b745e7aa49b4..5ce1c1fae00ca3bbf213532f5999d279
      all2all_backend: All2AllBackend = ParallelConfig.all2all_backend
      enable_elastic_ep: bool = ParallelConfig.enable_elastic_ep
      elastic_ep_max_dp_size: int = ParallelConfig.elastic_ep_max_dp_size
-@@ -1797,6 +1800,15 @@ class EngineArgs:
+@@ -1802,6 +1805,15 @@ class EngineArgs:
          kernel_group.add_argument(
              "--sparse-indexer-topk-backend", **sparse_indexer_topk_kwargs
          )
@@ -58,7 +60,7 @@ index 5f32ec8deb9f595492d0c5155e34b745e7aa49b4..5ce1c1fae00ca3bbf213532f5999d279
  
          # vLLM arguments
          vllm_kwargs = get_kwargs(VllmConfig)
-@@ -2741,6 +2753,10 @@ class EngineArgs:
+@@ -2747,6 +2759,10 @@ class EngineArgs:
              kernel_config.linear_backend = self.linear_backend
          if self.sparse_indexer_topk_backend != "auto":
              kernel_config.sparse_indexer_topk_backend = self.sparse_indexer_topk_backend

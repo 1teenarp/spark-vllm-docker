@@ -1,13 +1,14 @@
-From 946bc791c84a32752f8c3fcc0b3fa0bd9fac5591 Mon Sep 17 00:00:00 2001
 From: Stefano Castagnetta <scastagnetta@nvidia.com>
-Date: Wed, 7 Oct 2026 20:10:09 +0200
-Subject: [PATCH] [PR #59740 + #60226] Context Aware Sparse LM Head, including
- quantized lm_heads
-
-Combined net diff of #59740 and #60226 (#60226 is stacked on #59740), rebased to apply after #59958 and #59973. The only change versus the PR branches is in vllm/config/vllm.py: #59973 and #59740 each add an entry at the same spot in the V1 model runner unsupported-feature list, and both entries are kept.
+Subject: [PATCH] [PR #59740 + #60226] Context Aware Sparse LM Head, including quantized lm_heads
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59740
+Upstream-Commit: 3ed5c097f701b617f03e3b5d1e560a4044f0eb4a
 Upstream-PR: https://github.com/vllm-project/vllm/pull/60226
+Upstream-Commit: 9c42d41da0aedae76b5d5a878718d5945cd2a9f0
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
+
+Combined sparse draft vocabulary and quantized-head support. Preserve both
+unsupported-feature entries when combined with #59973.
 
 diff --git a/.buildkite/test_areas/spec_decode.yaml b/.buildkite/test_areas/spec_decode.yaml
 index d031d4fdea9b976173a6acd44cddeb8f9eba3d19..8d7cb3d417b42787e6c625f79fbe9cdbba60eed6 100644
@@ -736,10 +737,10 @@ index 4b63b36bd5f5116e25882ff9e5447002f110f2ef..babf73d087e51f45aabd91a542c4eb93
              self.verify_equal_vocab_size_if_draft_model()
          return self
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index d22adbe3b5e2f3a5249beaa21fcfaf27fc5bb76a..df3210808ab95b252ecea179b80b0d3988f77b71 100644
+index b6ee590b0397f2419310a724910c1ed4ddffa71d..3f371df9c4c21dc02c9690aa801d441e8a0dcf11 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
-@@ -3036,6 +3036,8 @@ class VllmConfig:
+@@ -3006,6 +3006,8 @@ class VllmConfig:
                  unsupported.append("adaptive draft verification")
              if self.speculative_config.draft_lm_head_quantization is not None:
                  unsupported.append("draft lm_head quantization")
@@ -1647,7 +1648,7 @@ index 9284dd59a09bad0e5e63dabb0f1556bdbc0da079..7cc97d94f319a0cedb198c681a7d511b
      def combine_hidden_states(
          self,
 diff --git a/vllm/model_executor/models/gemma4_dspark.py b/vllm/model_executor/models/gemma4_dspark.py
-index 33b1a1aada231f7367c6656898c8974411749062..27c0ca7af66489df8884a392c44c2f2034f08036 100644
+index 13c868e59b385d829979a524676fbf7f99e533d2..4fce5ce6c3b8b49a66b24a3a4f9e1aebc21c962c 100644
 --- a/vllm/model_executor/models/gemma4_dspark.py
 +++ b/vllm/model_executor/models/gemma4_dspark.py
 @@ -11,6 +11,7 @@ import torch.nn.functional as F
@@ -1658,7 +1659,7 @@ index 33b1a1aada231f7367c6656898c8974411749062..27c0ca7af66489df8884a392c44c2f20
  from vllm.model_executor.layers.layernorm import RMSNorm
  from vllm.model_executor.layers.linear import ColumnParallelLinear, ReplicatedLinear
  from vllm.model_executor.layers.logits_processor import LogitsProcessor
-@@ -304,7 +305,8 @@ class Gemma4DSparkForCausalLM(Qwen3DSparkForCausalLM):
+@@ -303,7 +304,8 @@ class Gemma4DSparkForCausalLM(Qwen3DSparkForCausalLM):
              self.config.vocab_size,
              soft_cap=getattr(self.config, "final_logit_softcapping", None),
          )
@@ -1757,10 +1758,10 @@ index 68e21c9dc284246ee2450494a34e123a23ab8ce9..5ef46805496f57267e7dd15136cc2f0f
      def combine_hidden_states(
          self,
 diff --git a/vllm/model_executor/models/qwen3_5_mtp.py b/vllm/model_executor/models/qwen3_5_mtp.py
-index d7fb1d6e09ea81f4ac5edef90fb70f9d3de94124..680c6899e7a6a83798e467dfb2edf8a3422822e8 100644
+index 2acac6b5b7c5979fbca477dabcd0a0aa5bfb0ff7..11d065e7699096a7aba3442d69401a81e9822995 100644
 --- a/vllm/model_executor/models/qwen3_5_mtp.py
 +++ b/vllm/model_executor/models/qwen3_5_mtp.py
-@@ -11,6 +11,7 @@ from vllm.compilation.decorators import support_torch_compile
+@@ -12,6 +12,7 @@ from vllm.compilation.decorators import support_torch_compile
  from vllm.config import VllmConfig
  from vllm.distributed import get_pp_group, tensor_model_parallel_all_gather
  from vllm.logger import init_logger
@@ -1768,7 +1769,7 @@ index d7fb1d6e09ea81f4ac5edef90fb70f9d3de94124..680c6899e7a6a83798e467dfb2edf8a3
  from vllm.model_executor.layers.fused_moe.utils import (
      is_model_fused_shared_expert_compatible,
  )
-@@ -248,6 +249,12 @@ class Qwen3_5MTP(LocalArgmaxMixin, nn.Module, SupportsMultiModal, SupportsPP):
+@@ -247,6 +248,12 @@ class Qwen3_5MTP(LocalArgmaxMixin, nn.Module, SupportsMultiModal, SupportsPP):
              self.lm_head = PPMissingLayer()
  
          self.logits_processor = LogitsProcessor(config.vocab_size)
@@ -1781,7 +1782,7 @@ index d7fb1d6e09ea81f4ac5edef90fb70f9d3de94124..680c6899e7a6a83798e467dfb2edf8a3
  
          self.make_empty_intermediate_tensors = (
              self.model.make_empty_intermediate_tensors
-@@ -298,7 +305,7 @@ class Qwen3_5MTP(LocalArgmaxMixin, nn.Module, SupportsMultiModal, SupportsPP):
+@@ -297,7 +304,7 @@ class Qwen3_5MTP(LocalArgmaxMixin, nn.Module, SupportsMultiModal, SupportsPP):
          hidden_states: torch.Tensor,
          spec_step_idx: int = 0,
      ) -> torch.Tensor | None:
@@ -1790,7 +1791,7 @@ index d7fb1d6e09ea81f4ac5edef90fb70f9d3de94124..680c6899e7a6a83798e467dfb2edf8a3
  
      def is_unused_checkpoint_weight(self, name: str) -> bool:
          return not name.startswith("mtp.") and not any(
-@@ -317,7 +324,11 @@ class Qwen3_5MTP(LocalArgmaxMixin, nn.Module, SupportsMultiModal, SupportsPP):
+@@ -316,7 +323,11 @@ class Qwen3_5MTP(LocalArgmaxMixin, nn.Module, SupportsMultiModal, SupportsPP):
                  yield name, weight
  
          loader = AutoWeightsLoader(self)

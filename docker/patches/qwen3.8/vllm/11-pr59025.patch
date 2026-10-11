@@ -2,6 +2,8 @@ From: schopde-nvidia
 Subject: [PATCH] [Kernel] Register the cudnn backend for FlashInfer BF16 mm
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59025
+Upstream-Commit: 29f8cedf94c43ebb813d8475cbd089d378b4f4ae
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
 
 diff --git a/vllm/model_executor/layers/utils.py b/vllm/model_executor/layers/utils.py
 index 80eef7c75a12d157a992d6e52b8c3bb9bd1469e8..768244435f76517efb83a48512e74cb54c75959c 100644

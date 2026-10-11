@@ -2,6 +2,10 @@ From: stecasta
 Subject: [PATCH] Canonical-layout NVFP4 W4A4 MoE in CuTe DSL on SM12x
 
 Upstream-PR: https://github.com/flashinfer-ai/flashinfer/pull/5863
+Upstream-Commit: a0997210fd45b9e3f35cddd44660137175824fe1
+Integration-Base: 34bb66e4d0b420b5a03c99b2b6a1c0831dfaa738
+
+Preserve both upstream cuDNN and SM12x MoE benchmark coverage.
 
 diff --git a/benchmarks/routines/unified_moe.py b/benchmarks/routines/unified_moe.py
 index 9376ac8f75d6062492f28a1644042e75462af6cf..65dd1dc51466daaf07b8cd66e3a0946d3b70a70f 100644
@@ -36,16 +40,16 @@ index 357f8cb0152097186e47318600077e87c859d3df..dd07833c8bb24dec004d914ceb0da48d
  --routine unified_moe --backends cutlass cutile cudnn --quant-variant fp8 --num_tokens 128 --hidden_size 2048 --intermediate_size 512 --num_experts 256 --top_k 8 --activation-type Swiglu --input_dtype bfloat16 --autotune --refcheck -vv --generate_repro_command --case_tag "qwen3.6_35b_a3b_fp8"
  --routine unified_moe --backends cutile --quant-variant fp8_w8a16 --num_tokens 8 --hidden_size 2048 --intermediate_size 512 --num_experts 256 --top_k 8 --activation-type Swiglu --input_dtype bfloat16 --autotune --refcheck -vv --generate_repro_command --case_tag "qwen3.6_35b_a3b_fp8_w8a16"
 diff --git a/docs/design_docs/flashinfer_moe_api.md b/docs/design_docs/flashinfer_moe_api.md
-index 0e799ad9c8ebf2d8535a19d6a8b12271e610d52d..4481a4d90c3ce275286db61f7d5e3f2c64c5b792 100644
+index ea2ae11d4e663491985a0f5bb67e9a8e8b1c5dfc..2c4daf3e33fafc02f1dd47b65240b21fd7c8ff72 100644
 --- a/docs/design_docs/flashinfer_moe_api.md
 +++ b/docs/design_docs/flashinfer_moe_api.md
-@@ -850,6 +850,7 @@ python scripts/generate_moe_activation_matrix.py --write
+@@ -895,6 +895,7 @@ python scripts/generate_moe_activation_matrix.py --write
  | `prims_ts` | `PrimsTsConfig` | `NVFP4×NVFP4` | `SwiGLU`, `GeGLU`, `SiTU`, `ReLU2` |
  | `sm12x_fp8` | `SM12xFp8Config` | `DeepSeekFp8×DeepSeekFp8` | `SwiGLU` |
  | `sm12x_mxfp8_mxfp4` | `SM12xMxfp8Mxfp4Config` | `MXFP4×MXFP8` | `SwiGLU`, `SiTU` |
 +| `sm12x_nvfp4` | `SM12xNvfp4Config` | `NVFP4×NVFP4` | `SwiGLU`, `ReLU2` |
  | `sm12x_nvfp4_bf16` | `SM12xNvfp4Bf16Config` | `NVFP4×BF16` | `SwiGLU`, `ReLU2` |
- | `trtllm_bf16_routed` | `TrtllmBf16Config` | `BF16×BF16` | `SwiGLU`, `ReLU2` |
+ | `trtllm_bf16_routed` | `TrtllmBf16Config` | `BF16×BF16` | `SwiGLU`, `SwiGLUStep`, `ReLU2` |
  | `trtllm_fp4_routed` | `TrtllmFp4Config` | `MXFP4×BF16` | `SwiGLU` |
 diff --git a/flashinfer/fused_moe/__init__.py b/flashinfer/fused_moe/__init__.py
 index b676008bf496e519cd5c2ccac35546f8be1aed65..d9657d2ab2825da083804e87d9c4702330c9aedb 100644
@@ -1517,10 +1521,10 @@ index d9f5b6888335fc6e9fd5e92faaa40fe329618e57..2605518020b354b0d770ee42a2ec2212
      TrtllmBf16Config: TrtllmBf16RoutedRunner,
      TrtllmFp8BlockConfig: TrtllmFp8BlockRunner,
 diff --git a/flashinfer/fused_moe/runners.py b/flashinfer/fused_moe/runners.py
-index 008065997da9e854365b3cda506fd4078bc95113..e9d45c1ca9d486876e75239faa08748d380a9790 100644
+index 9bb167f42137103b1839b6eaada728ffb3babbc2..df9f99d2a8f31820b2408160445b29c50ef739ae 100644
 --- a/flashinfer/fused_moe/runners.py
 +++ b/flashinfer/fused_moe/runners.py
-@@ -8319,6 +8319,162 @@ class SM12xNvfp4Bf16Runner(MoERunner):
+@@ -8349,6 +8349,162 @@ class SM12xNvfp4Bf16Runner(MoERunner):
          return out[: getattr(inputs, "num_tokens", out.shape[0])]
  
  

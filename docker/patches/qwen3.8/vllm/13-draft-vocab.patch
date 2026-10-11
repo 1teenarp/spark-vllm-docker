@@ -1,12 +1,7 @@
-From 561489f6fc6f1004072ae12f8b8d6c0ede51b774 Mon Sep 17 00:00:00 2001
 From: Stefano Castagnetta <scastagnetta@nvidia.com>
-Date: Wed, 7 Oct 2026 20:09:07 +0200
 Subject: [PATCH] Add 32k Qwen3.8-Flash-Next draft vocabulary list
 
-32,768 sorted unique token ids (max 248076) for use as speculative_config
-draft_token_map with the Context Aware Sparse LM Head
-(https://github.com/vllm-project/vllm/pull/59740,
-https://github.com/vllm-project/vllm/pull/60226).
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
 
 diff --git a/vllm/model_executor/layers/draft_vocab_lists/qwen38_flash_next_32k.json b/vllm/model_executor/layers/draft_vocab_lists/qwen38_flash_next_32k.json
 new file mode 100644

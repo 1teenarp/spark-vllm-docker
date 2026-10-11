@@ -1,13 +1,13 @@
-From 81cd9dc75a7169746f62a95e9b7cfe84cda32214 Mon Sep 17 00:00:00 2001
 From: Stefano Castagnetta <scastagnetta@nvidia.com>
-Date: Wed, 7 Oct 2026 20:10:43 +0200
-Subject: [PATCH] [PR #54614] [Kernel] Dynamic NVFP4 W4A4/W4A16 selection with
- shared weights
-
-Rebased onto current main. Preserve round_up=True, retain the full-model BF16 autotune path after #60434, and update the warmup test fixtures for dynamic linear selection.
-Preserve the quantized-input shape test added by #59612 when inserting the dynamic precision test.
+Subject: [PATCH] [PR #54614] [Kernel] Dynamic NVFP4 W4A4/W4A16 selection with shared weights
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/54614
+Upstream-Commit: 7fb05c982f69233c0175fea2e54bda441e96476b
+Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
+
+Preserve the quantized-input shape and autotune cache-key tests from main.
+Keep round_up=True and full-model autotuning after removal of the obsolete
+BF16-only warmup path.
 
 diff --git a/.buildkite/test_areas/kernels.yaml b/.buildkite/test_areas/kernels.yaml
 index aa0971b4c55ed08435cf21689eb332865d9fa075..fb792c4716882a87b49257adc3d7c17fa909ac09 100644
@@ -761,6 +761,118 @@ index ba069dbad1767a29caebb9fa818b1f2e59852f7e..57fd844ec86701d4ff5d309835056a6f
 +    assert supported == a4_available
 +    if not supported:
 +        assert "flashinfer_cutlass" in reason
+diff --git a/tests/model_executor/test_flashinfer_autotune_warmup.py b/tests/model_executor/test_flashinfer_autotune_warmup.py
+index 59046a5f3e8d6115a206cfeb4affb25b92a89e87..b8e07dd0d1f918f456728f394808eb3a3ed2a016 100644
+--- a/tests/model_executor/test_flashinfer_autotune_warmup.py
++++ b/tests/model_executor/test_flashinfer_autotune_warmup.py
+@@ -4,7 +4,7 @@
+ import json
+ import sys
+ from collections import defaultdict
+-from contextlib import nullcontext
++from contextlib import contextmanager, nullcontext
+ from inspect import signature
+ from pathlib import Path
+ from types import ModuleType, SimpleNamespace
+@@ -12,6 +12,7 @@ from typing import Any
+ from unittest.mock import Mock, call, patch
+ 
+ import pytest
++import torch
+ 
+ from vllm.model_executor.warmup import kernel_warmup as warmup
+ from vllm.model_executor.warmup.kernel_warmup import (
+@@ -39,11 +40,12 @@ def _make_moe(*, max_deferred_tokens: int = 128, enabled: bool = True):
+     return moe
+ 
+ 
+-def _make_runner(modules, *, max_tokens: int = 8192):
++def _make_runner(modules, *, max_tokens: int = 8192, linear_backend: str = "auto"):
+     """Create a runner carrying only the state used by FlashInfer warmup."""
+     return SimpleNamespace(
+         scheduler_config=SimpleNamespace(max_num_batched_tokens=max_tokens),
+         vllm_config=SimpleNamespace(
++            kernel_config=SimpleNamespace(linear_backend=linear_backend),
+             attention_config=SimpleNamespace(hisparse_config=None),
+             parallel_config=SimpleNamespace(data_parallel_rank=0),
+         ),
+@@ -83,6 +85,29 @@ def test_flashinfer_autotune_token_counts_are_bounded_and_deduplicated():
+     assert token_counts == (32,)
+ 
+ 
++@pytest.mark.parametrize(
++    "linear_cutoff,silu_cutoff,max_tokens,expected",
++    [
++        (4, 16, 8192, (8192, 1, 2, 4, 8, 16)),
++        (4, None, 8192, (8192, 1, 2, 4)),
++        (0, 16, 8, (8, 1, 2, 4)),
++        (0, None, 8192, (8192,)),
++    ],
++)
++def test_dynamic_nvfp4_warmup_covers_fused_cutoff(
++    linear_cutoff, silu_cutoff, max_tokens, expected
++):
++    """Fused down projections may use W4A16 beyond the ordinary linear cutoff."""
++    runner = _make_runner([], max_tokens=max_tokens, linear_backend="nvfp4_dynamic")
++    runner.vllm_config.kernel_config.nvfp4_dynamic_max_tokens = linear_cutoff
++    runner.vllm_config.kernel_config.nvfp4_dynamic_silu_max_tokens = silu_cutoff
++    runner.vllm_config.compilation_config = SimpleNamespace(
++        cudagraph_capture_sizes=[1, 2, 4, 8, 16, 32]
++    )
++    with patch("vllm.model_executor.layers.fused_moe.MoERunner", _FakeMoERunner):
++        assert _flashinfer_autotune_token_counts(runner) == expected
++
++
+ @pytest.mark.parametrize("skip_attn", [False, True])
+ def test_flashinfer_autotune_uses_token_buckets_for_each_dummy_run(skip_attn):
+     from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
+@@ -417,3 +442,46 @@ def test_autotune_cache_key_normalizes_kv_init_fields():
+         _normalize_cache_config_for_hash(resolved).compute_hash()
+         != fresh.compute_hash()
+     )
++
++
++def test_dynamic_nvfp4_logits_tuning_is_bounded_by_sampled_sequences():
++    """Large prefill buckets must not allocate equally large logits buffers."""
++    runner = _make_runner([], max_tokens=2048, linear_backend="nvfp4_dynamic")
++    sampled = torch.empty((16, 32))
++    active_buckets = []
++    observed = {}
++
++    @contextmanager
++    def autotune(*, tuning_buckets, round_up=False):
++        active_buckets.append(tuning_buckets)
++        try:
++            yield
++        finally:
++            active_buckets.pop()
++
++    def backbone(**kwargs):
++        observed["prefill_max"] = max(active_buckets[-1])
++        return None, sampled
++
++    def logits(hidden_states):
++        observed["sampled_rows"] = hidden_states.shape[0]
++        observed["logits_buckets"] = active_buckets[-1]
++
++    runner._dummy_run.side_effect = backbone
++    runner.get_model.return_value.compute_logits = logits
++    with (
++        patch(
++            "vllm.model_executor.warmup.kernel_warmup."
++            "_flashinfer_autotune_token_counts",
++            return_value=(2048,),
++        ),
++        patch("vllm.utils.flashinfer.autotune", autotune),
++    ):
++        _run_flashinfer_autotune_dummy_runs(runner)
++
++    assert observed == {
++        "prefill_max": 2048,
++        "sampled_rows": 16,
++        "logits_buckets": (1, 2, 4, 8, 16),
++    }
++    assert not active_buckets
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
 index fa3ecf5df95da3b2cc3da73b8601686698f7dc25..89280e024023ad05355704b839804fa75c22a9fe 100644
 --- a/vllm/config/kernel.py
@@ -1240,7 +1352,7 @@ index 1c095d6f091c8bc932cd4058bfd1e89f6f141b85..020f465cedc33b7fc2607bf8bbfd9a03
          if self.expert_gate is not None:
              out = F.sigmoid(self.expert_gate(x)[0]) * out
 diff --git a/vllm/model_executor/warmup/kernel_warmup.py b/vllm/model_executor/warmup/kernel_warmup.py
-index e5751730e85d7466e5adb541624c94b5561bba95..9781539931197e12b56ae952b8fd8827df3bf14d 100644
+index 685b33a5652a23cc28eb5eeddc0cd1e59bd017c2..ec932733b1c767519be47426883437d5bbc5b16f 100644
 --- a/vllm/model_executor/warmup/kernel_warmup.py
 +++ b/vllm/model_executor/warmup/kernel_warmup.py
 @@ -340,6 +340,19 @@ def _flashinfer_autotune_token_counts(runner: "GPUModelRunner") -> tuple[int, ..
@@ -1288,115 +1400,3 @@ index e5751730e85d7466e5adb541624c94b5561bba95..9781539931197e12b56ae952b8fd8827
  
  
  def _autotune_cache_fingerprint(path: Path) -> tuple[str, int] | None:
-diff --git a/tests/model_executor/test_flashinfer_autotune_warmup.py b/tests/model_executor/test_flashinfer_autotune_warmup.py
-index f7ea6847f26f12b7035a6a69a88d4170a410d435..f50b229228f73914dc8f6513376231d87188f8ba 100644
---- a/tests/model_executor/test_flashinfer_autotune_warmup.py
-+++ b/tests/model_executor/test_flashinfer_autotune_warmup.py
-@@ -4,7 +4,7 @@
- import json
- import sys
- from collections import defaultdict
--from contextlib import nullcontext
-+from contextlib import contextmanager, nullcontext
- from inspect import signature
- from pathlib import Path
- from types import ModuleType, SimpleNamespace
-@@ -12,6 +12,7 @@ from typing import Any
- from unittest.mock import Mock, call, patch
- 
- import pytest
-+import torch
- 
- from vllm.model_executor.warmup import kernel_warmup as warmup
- from vllm.model_executor.warmup.kernel_warmup import (
-@@ -39,11 +40,12 @@ def _make_moe(*, max_deferred_tokens: int = 128, enabled: bool = True):
-     return moe
- 
- 
--def _make_runner(modules, *, max_tokens: int = 8192):
-+def _make_runner(modules, *, max_tokens: int = 8192, linear_backend: str = "auto"):
-     """Create a runner carrying only the state used by FlashInfer warmup."""
-     return SimpleNamespace(
-         scheduler_config=SimpleNamespace(max_num_batched_tokens=max_tokens),
-         vllm_config=SimpleNamespace(
-+            kernel_config=SimpleNamespace(linear_backend=linear_backend),
-             attention_config=SimpleNamespace(hisparse_config=None),
-             parallel_config=SimpleNamespace(data_parallel_rank=0),
-         ),
-@@ -83,6 +85,29 @@ def test_flashinfer_autotune_token_counts_are_bounded_and_deduplicated():
-     assert token_counts == (32,)
- 
- 
-+@pytest.mark.parametrize(
-+    "linear_cutoff,silu_cutoff,max_tokens,expected",
-+    [
-+        (4, 16, 8192, (8192, 1, 2, 4, 8, 16)),
-+        (4, None, 8192, (8192, 1, 2, 4)),
-+        (0, 16, 8, (8, 1, 2, 4)),
-+        (0, None, 8192, (8192,)),
-+    ],
-+)
-+def test_dynamic_nvfp4_warmup_covers_fused_cutoff(
-+    linear_cutoff, silu_cutoff, max_tokens, expected
-+):
-+    """Fused down projections may use W4A16 beyond the ordinary linear cutoff."""
-+    runner = _make_runner([], max_tokens=max_tokens, linear_backend="nvfp4_dynamic")
-+    runner.vllm_config.kernel_config.nvfp4_dynamic_max_tokens = linear_cutoff
-+    runner.vllm_config.kernel_config.nvfp4_dynamic_silu_max_tokens = silu_cutoff
-+    runner.vllm_config.compilation_config = SimpleNamespace(
-+        cudagraph_capture_sizes=[1, 2, 4, 8, 16, 32]
-+    )
-+    with patch("vllm.model_executor.layers.fused_moe.MoERunner", _FakeMoERunner):
-+        assert _flashinfer_autotune_token_counts(runner) == expected
-+
-+
- @pytest.mark.parametrize("skip_attn", [False, True])
- def test_flashinfer_autotune_uses_token_buckets_for_each_dummy_run(skip_attn):
-     from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
-@@ -386,3 +411,46 @@ def test_rejected_cache_retunes_every_rank_in_its_tuning_group(autotune_run, pp,
-     rerun.assert_collectives_match()
-     assert set(rerun.profile_groups) == set(range(tp))
-     assert {rank for rank, _, _ in rerun.saves} == set(range(tp))
-+
-+
-+def test_dynamic_nvfp4_logits_tuning_is_bounded_by_sampled_sequences():
-+    """Large prefill buckets must not allocate equally large logits buffers."""
-+    runner = _make_runner([], max_tokens=2048, linear_backend="nvfp4_dynamic")
-+    sampled = torch.empty((16, 32))
-+    active_buckets = []
-+    observed = {}
-+
-+    @contextmanager
-+    def autotune(*, tuning_buckets, round_up=False):
-+        active_buckets.append(tuning_buckets)
-+        try:
-+            yield
-+        finally:
-+            active_buckets.pop()
-+
-+    def backbone(**kwargs):
-+        observed["prefill_max"] = max(active_buckets[-1])
-+        return None, sampled
-+
-+    def logits(hidden_states):
-+        observed["sampled_rows"] = hidden_states.shape[0]
-+        observed["logits_buckets"] = active_buckets[-1]
-+
-+    runner._dummy_run.side_effect = backbone
-+    runner.get_model.return_value.compute_logits = logits
-+    with (
-+        patch(
-+            "vllm.model_executor.warmup.kernel_warmup."
-+            "_flashinfer_autotune_token_counts",
-+            return_value=(2048,),
-+        ),
-+        patch("vllm.utils.flashinfer.autotune", autotune),
-+    ):
-+        _run_flashinfer_autotune_dummy_runs(runner)
-+
-+    assert observed == {
-+        "prefill_max": 2048,
-+        "sampled_rows": 16,
-+        "logits_buckets": (1, 2, 4, 8, 16),
-+    }
-+    assert not active_buckets

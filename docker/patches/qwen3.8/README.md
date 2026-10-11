@@ -45,9 +45,42 @@ The FlashInfer order is
 [#5863](https://github.com/flashinfer-ai/flashinfer/pull/5863) (canonical NVFP4
 W4A4 MoE), then [#5943](https://github.com/flashinfer-ai/flashinfer/pull/5943)
 (SM12x CuTe DSL MXFP8 GEMMs). #5943 includes head
-`b3568f3498fd562ec621e972de85d153abdc823e`.
+`15c5c8d21388c118558c8370299204aa4b110ced`.
 
 ## Integration and refresh
+
+All 16 patches were refreshed on October 10, 2026 against upstream vLLM
+`3c062d391d15cfa41d3f321cad24f3030c892a97` and FlashInfer
+`34bb66e4d0b420b5a03c99b2b6a1c0831dfaa738`. Each patch header records the full
+upstream PR revision(s) and integration base, including bundled dependencies.
+The vocabulary and package-data patches remain local additions. These are
+validation bases; normal builds still follow their selected refs.
+
+The refresh includes:
+
+- #56273's review fixes, which were missing from #59958's bundled dependency:
+  dummy-load handling, byte-based E4M3 scale decoding, 64-bit lookup row indices,
+  pinned-row sizing, and an explicit ROCm rejection. The shared NVFP4 row decoder
+  serves resident, pinned, and file-gather storage; dummy file-gather tables still
+  bind their staging buffers even though checkpoint validation is skipped.
+- #50897 at `5f36a6cd20f83e660876f432facbf2ed07a998e7`, including updated Mamba
+  prefix-cache expectations, spawned MRV2 tests, and missing test imports/mock
+  arguments. The allocation-time cache fix and Mooncake integration below remain.
+- #5943's autotuner override fix, preserving the selected timer and first-tactic
+  margin, plus parallel SM12x MXFP8 compilation and queued bucket preparation.
+- A refreshed #54614 test hunk preserving both its bounded-logits test and the
+  autotune cache-key test added by upstream
+  [#60085](https://github.com/vllm-project/vllm/pull/60085). The overlapping
+  insertion previously stopped regular-lane builds.
+
+Validation: both exported series replay cleanly from the bases above and
+reproduce the prepared source trees exactly. All 17 subsequent vLLM source
+patchers and the FlashInfer loader patch pass; all 141 changed Python files
+parse. The 7 series tests, 28 SWA tests, and 100 build-selection checks pass.
+Focused CPU checks cover cache-boundary publication, Mooncake save limits and
+references, PLE dummy binding/byte-scale lookup, and autotuner overrides. The
+32,768-token vocabulary and its wheel package-data rule are retained. GPU
+compilation and inference remain for nightly CI.
 
 The October 8, 2026 series was replayed against upstream vLLM
 `ab905a885dfbfc60a2c02286cc9c608c93884de3` and FlashInfer
