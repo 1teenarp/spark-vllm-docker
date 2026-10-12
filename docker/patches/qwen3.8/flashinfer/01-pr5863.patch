@@ -3,7 +3,7 @@ Subject: [PATCH] Canonical-layout NVFP4 W4A4 MoE in CuTe DSL on SM12x
 
 Upstream-PR: https://github.com/flashinfer-ai/flashinfer/pull/5863
 Upstream-Commit: a0997210fd45b9e3f35cddd44660137175824fe1
-Integration-Base: 34bb66e4d0b420b5a03c99b2b6a1c0831dfaa738
+Integration-Base: b77de25d433ff5082247b8e306c3aa54857e3ed7
 
 Preserve both upstream cuDNN and SM12x MoE benchmark coverage.
 

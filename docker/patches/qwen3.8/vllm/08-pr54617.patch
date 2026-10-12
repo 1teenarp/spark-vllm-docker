@@ -3,7 +3,7 @@ Subject: [PATCH] [Kernel][Quant][MoE] Per-forward NVFP4 W4A4/W4A16 selection for
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/54617
 Upstream-Commit: 69d21d81808bcea2de3b97a0b68c97545808a043
-Integration-Base: 3c062d391d15cfa41d3f321cad24f3030c892a97
+Integration-Base: fe341a53dda00472c281a2d1f4bd34a74e7eae6e
 
 diff --git a/tests/kernels/moe/test_flashinfer_cutile_nvfp4_moe.py b/tests/kernels/moe/test_flashinfer_cutile_nvfp4_moe.py
 new file mode 100644
