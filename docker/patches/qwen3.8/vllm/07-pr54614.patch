@@ -2,8 +2,8 @@ From: Stefano Castagnetta <scastagnetta@nvidia.com>
 Subject: [PATCH] [PR #54614] [Kernel] Dynamic NVFP4 W4A4/W4A16 selection with shared weights
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/54614
-Upstream-Commit: 7fb05c982f69233c0175fea2e54bda441e96476b
-Integration-Base: fe341a53dda00472c281a2d1f4bd34a74e7eae6e
+Upstream-Commit: 5feaedcf9b4fa18d9e0b817153d681bededdd4d9
+Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
 
 Preserve the quantized-input shape and autotune cache-key tests from main.
 Keep round_up=True and full-model autotuning after removal of the obsolete
@@ -874,7 +874,7 @@ index 59046a5f3e8d6115a206cfeb4affb25b92a89e87..b8e07dd0d1f918f456728f394808eb3a
 +    }
 +    assert not active_buckets
 diff --git a/vllm/config/kernel.py b/vllm/config/kernel.py
-index fa3ecf5df95da3b2cc3da73b8601686698f7dc25..89280e024023ad05355704b839804fa75c22a9fe 100644
+index 5c4b877fd795865d50a9e05a5601800e1920ebdc..e4466dea2f87feb9e5306c618fd385d1d6ac94e1 100644
 --- a/vllm/config/kernel.py
 +++ b/vllm/config/kernel.py
 @@ -246,6 +246,7 @@ LinearBackend = Literal[

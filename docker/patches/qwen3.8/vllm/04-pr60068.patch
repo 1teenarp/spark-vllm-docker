@@ -2,8 +2,8 @@ From: Stefano Castagnetta <scastagnetta@nvidia.com>
 Subject: [PATCH] [PR #60068] [MRV2][Spec Decode] Opt-in confidence stop for autoregressive drafting
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/60068
-Upstream-Commit: 029a811ebaf31b8ee03422af193179bc93d5fefd
-Integration-Base: fe341a53dda00472c281a2d1f4bd34a74e7eae6e
+Upstream-Commit: 8ae78ccaf8825b3e55ab014e282c769902ca198c
+Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
 
 Preserve both quantized draft-head and adaptive-depth documentation/tests.
 Use #60692's supports_decode_metadata_update API; confidence stopping
@@ -25,10 +25,10 @@ index 2254827d13b54bf8f8f363c12364377446900765..66410e4da75a1e389acac9150882b640
 +  every draft step, which costs more than it saves on faster GPUs, so it is
 +  rejected elsewhere; SM120 (RTX PRO 6000, RTX 5090) is untested.
 diff --git a/tests/v1/core/test_scheduler.py b/tests/v1/core/test_scheduler.py
-index 107a37dc91c0c4b6902c09e967bbec644dbf0e7d..787c44e3a094bd94a4eb71f7699c5d2a41adca03 100644
+index 99eb02ff3389274efe04d875c2088e8017e77d54..5800fe030553a592d62df807ba5f50bc1041d951 100644
 --- a/tests/v1/core/test_scheduler.py
 +++ b/tests/v1/core/test_scheduler.py
-@@ -2090,6 +2090,43 @@ def test_per_request_spec_decode_subtracts_invalid_drafts():
+@@ -2124,6 +2124,43 @@ def test_per_request_spec_decode_subtracts_invalid_drafts():
      assert payload["acceptance_histogram"] == [0, 0, 1, 0]
  
  
@@ -412,7 +412,7 @@ index e0b8d4c6ebdb6a52538a759bcfef4ca2b8acf858..48c1c04edc8ce6f83be2f884a0606450
      def _acceptance_length_to_rates(length: float, n: int) -> list[float]:
          """Mean acceptance length to unconditional per-position rates, using
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index ad147ca155f016b539d46699193aca2edb2b7977..55fa51f81f27075c88b7126271fe7f4b15733130 100644
+index df9c0c1a789147c1aa55c4cd373c38081846b4b7..b710948406c3553e02ae39d24e60bc2532667ca8 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
 @@ -1074,6 +1074,44 @@ class VllmConfig:
@@ -469,10 +469,10 @@ index ad147ca155f016b539d46699193aca2edb2b7977..55fa51f81f27075c88b7126271fe7f4b
  
          if (
 diff --git a/vllm/v1/core/sched/scheduler.py b/vllm/v1/core/sched/scheduler.py
-index cec96d2a49235fdade2768c427f1cff7868c6026..061949de52425f7aa6f51d3981b4eb291ffce43c 100644
+index a6ca6074dfda0ac56e3b8f49adae58bc199cd324..f5e91e65f7d7a229a1061e69647805b4d336be17 100644
 --- a/vllm/v1/core/sched/scheduler.py
 +++ b/vllm/v1/core/sched/scheduler.py
-@@ -2126,9 +2126,15 @@ class Scheduler(SchedulerInterface):
+@@ -2129,9 +2129,15 @@ class Scheduler(SchedulerInterface):
                          request.num_computed_tokens -= num_rejected
                      if request.num_output_placeholders > 0:
                          request.num_output_placeholders -= num_rejected
@@ -489,7 +489,7 @@ index cec96d2a49235fdade2768c427f1cff7868c6026..061949de52425f7aa6f51d3981b4eb29
                      num_accepted_tokens=num_accepted,
                      num_invalid_spec_tokens=scheduler_output.num_invalid_spec_tokens,
                      request_id=req_id,
-@@ -2137,7 +2143,7 @@ class Scheduler(SchedulerInterface):
+@@ -2140,7 +2146,7 @@ class Scheduler(SchedulerInterface):
                      # Exclude grammar-invalidated drafts from the proposed
                      # count, mirroring make_spec_decoding_stats; the accepted
                      # bucket (j) is unaffected.
@@ -514,7 +514,7 @@ index 22169b1fda93861db267ea73be64637a3f5bc17e..9334a19504db60a67e211f37fc7ec7a6
      def with_kv_conn_output_only(
          kv_connector_output: KVConnectorOutput | None,
 diff --git a/vllm/v1/worker/gpu/cudagraph_utils.py b/vllm/v1/worker/gpu/cudagraph_utils.py
-index 73be62319a64bfd8e0986811fdfce1a0e3914123..b57141425a16709893fe3797ef7f45cab6af24c1 100644
+index 3a6409db55468ad8840276b3e63509fcfb31ac05..62a21adb67b0d422919bfa4ebf83957f06c344f6 100644
 --- a/vllm/v1/worker/gpu/cudagraph_utils.py
 +++ b/vllm/v1/worker/gpu/cudagraph_utils.py
 @@ -269,6 +269,7 @@ class CudaGraphManager:

@@ -56,6 +56,36 @@ W4A4 MoE), then [#5943](https://github.com/flashinfer-ai/flashinfer/pull/5943)
 
 ## Integration and refresh
 
+All 18 patches were refreshed on October 13, 2026 against upstream vLLM
+`12b005eefa06f97eeebfae3e14bcac5fa3b81197` and FlashInfer
+`74ca44b318a3be013649baabca698099d0862e3c`. Eight referenced PR heads changed:
+vLLM #56273, #59973, #59740, #60226, #60068, #50897, and #54614, plus
+FlashInfer #5863. All 17 referenced PRs remain open. The patch headers record
+their current revisions; existing local integration fixes are retained.
+#56273 updates the pinned PLE test for the current prefetch API and trims its
+test coverage to loader/lookup validation. The other head updates merge main;
+their conflict resolutions are incorporated without duplicating tests or hooks.
+
+The refresh resolves two new source conflicts:
+
+- [#61183](https://github.com/vllm-project/vllm/pull/61183) moved KV-cache
+  planning out of `kv_cache_utils.py`, overlapping #50897's hash helpers.
+  The helpers remain in that file without restoring the moved planning code.
+- [#61082](https://github.com/vllm-project/vllm/pull/61082) added the
+  `monokernel` setting at #54617's insertion point. Both that setting and the
+  dynamic NVFP4 MoE settings are preserved.
+
+Validation: the complete 16-patch vLLM and 2-patch FlashInfer series replay
+cleanly and reproduce the prepared source trees. All 17 subsequent vLLM source
+patchers and the FlashInfer loader patch pass; all 153 changed Python files
+compile. The 14 series tests, 28 SWA tests, 100 build-selection checks, 28 CPU
+loader tests, and nine PLE constructor cases pass. The new series regression
+reproduces the old KV-cache patch failure and checks lookahead metadata and
+the non-lookahead fallback after application. Both draft vocabularies and their
+wheel package-data rules remain intact. The native-reader test is skipped on
+CPU; image compilation and GPU inference remain for CI. These results apply
+to the recorded commits; builds following moving main can need another refresh.
+
 The host-file-gather implementation in `01-pr59958.patch` now implements the
 current PLE base class's `finalize_prefetch` method and single-argument
 `start_prefetch` signature. File gather keeps synchronous row staging and

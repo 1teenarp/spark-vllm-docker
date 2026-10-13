@@ -2,10 +2,10 @@ From: Stefano Castagnetta <scastagnetta@nvidia.com>
 Subject: [PATCH] [PR #59740 + #60226] Context Aware Sparse LM Head, including quantized lm_heads
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59740
-Upstream-Commit: 3ed5c097f701b617f03e3b5d1e560a4044f0eb4a
+Upstream-Commit: 6160ed7294754516079e7765f5f7bacf9c1432b6
 Upstream-PR: https://github.com/vllm-project/vllm/pull/60226
-Upstream-Commit: 9c42d41da0aedae76b5d5a878718d5945cd2a9f0
-Integration-Base: fe341a53dda00472c281a2d1f4bd34a74e7eae6e
+Upstream-Commit: 92ed4c1160e11cd712934eb2525b6df3b8cebb83
+Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
 
 Combined sparse draft vocabulary and quantized-head support. Preserve both
 unsupported-feature entries when combined with #59973.
@@ -737,7 +737,7 @@ index cb9573fd6b5f8f58d6107f2e5654fed30c6063e4..e0b8d4c6ebdb6a52538a759bcfef4ca2
              self.verify_equal_vocab_size_if_draft_model()
          return self
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index 65efe244184c7360128d07262063cd5daf9df930..ad147ca155f016b539d46699193aca2edb2b7977 100644
+index 86696928649505cc4ddbceefc7889eec5e0c064c..df9c0c1a789147c1aa55c4cd373c38081846b4b7 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
 @@ -2981,6 +2981,8 @@ class VllmConfig:
@@ -1670,7 +1670,7 @@ index 13c868e59b385d829979a524676fbf7f99e533d2..4fce5ce6c3b8b49a66b24a3a4f9e1aeb
      def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
          stacked = [("gate_up_proj", "gate_proj", 0), ("gate_up_proj", "up_proj", 1)]
 diff --git a/vllm/model_executor/models/interfaces.py b/vllm/model_executor/models/interfaces.py
-index 4dc67ff34d27a39c3f9da8e737a0b454af00a5c3..513578da5f105e6932971b9bb6008584a09527fd 100644
+index a780cbe23cf6b6afc00a30ca36d74acc3ca68b4c..a54ea0aa4d6aeef8e81b0f488f513102b2ee9aac 100644
 --- a/vllm/model_executor/models/interfaces.py
 +++ b/vllm/model_executor/models/interfaces.py
 @@ -50,6 +50,7 @@ if TYPE_CHECKING:
@@ -1681,7 +1681,7 @@ index 4dc67ff34d27a39c3f9da8e737a0b454af00a5c3..513578da5f105e6932971b9bb6008584
      from vllm.model_executor.layers.fused_moe import MoERunner
      from vllm.model_executor.layers.logits_processor import LogitsProcessor
      from vllm.model_executor.layers.mamba.mamba_utils import (
-@@ -1549,6 +1550,7 @@ class LocalArgmaxMixin:
+@@ -1528,6 +1529,7 @@ class LocalArgmaxMixin:
          ``self.logits_processor``: LogitsProcessor
          ``self.lm_head``: ParallelLMHead
          ``self.draft_id_to_target_id`` (optional): nn.Parameter
@@ -1689,7 +1689,7 @@ index 4dc67ff34d27a39c3f9da8e737a0b454af00a5c3..513578da5f105e6932971b9bb6008584
      """
  
      logits_processor: "LogitsProcessor"
-@@ -1556,6 +1558,9 @@ class LocalArgmaxMixin:
+@@ -1535,6 +1537,9 @@ class LocalArgmaxMixin:
  
      def get_top_tokens(self, hidden_states: torch.Tensor) -> torch.Tensor:
          """Vocab-parallel argmax with optional D2T remapping."""

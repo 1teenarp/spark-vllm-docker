@@ -275,6 +275,40 @@ class PatchSeriesTests(unittest.TestCase):
             runner.reload_weights()
         self.assertEqual(events, [])
 
+    def test_lookahead_hashing_survives_kv_cache_planning_move(self):
+        # #61183 moved the planning functions following the hasher to another
+        # module. The hash helpers must still apply without restoring them.
+        upstream, updated = self.apply_upstream_excerpt(
+            "06-pr50897.patch", "vllm/v1/core/kv_cache_utils.py",
+            "kv_cache_planning_move_upstream.py",
+            ("+def generate_lookahead_block_hash_extra_keys(",),
+        )
+        helpers = {
+            "generate_lookahead_block_hash_extra_keys",
+            "generate_request_block_hash_extra_keys",
+        }
+        after = ast.parse(updated)
+        after.body = [n for n in after.body if getattr(n, "name", None) not in helpers]
+        self.assertEqual(ast.dump(ast.parse(upstream)), ast.dump(after))
+
+        extra_keys = Mock(side_effect=[(("block-image",), 4), (("next-image",), 5)])
+        namespace = {"generate_block_hash_extra_keys": extra_keys}
+        exec("from __future__ import annotations\n" + updated, namespace)
+        request = SimpleNamespace(all_token_ids=[10, 11, 12, 13, 14])
+        generate = namespace["generate_request_block_hash_extra_keys"]
+        self.assertEqual(
+            generate(request, 0, 4, 3, True),
+            ((("block-image",), 14, ("next-image",)), 4),
+        )
+        self.assertEqual(
+            [call.args for call in extra_keys.call_args_list],
+            [(request, 0, 4, 3), (request, 4, 5, 4)],
+        )
+        extra_keys.reset_mock(side_effect=True)
+        extra_keys.return_value = (None, 4)
+        self.assertEqual(generate(request, 0, 4, 3, False), (None, 4))
+        extra_keys.assert_called_once_with(request, 0, 4, 3)
+
     def test_core_and_mooncake_retain_matching_replay_boundaries(self):
         _, core = self.apply_upstream_excerpt(
             "06-pr50897.patch", "vllm/v1/core/kv_cache_coordinator.py",

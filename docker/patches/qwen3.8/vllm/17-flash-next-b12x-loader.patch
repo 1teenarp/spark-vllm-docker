@@ -1,7 +1,8 @@
 Subject: [PATCH] Flash Next B12X checkpoint loading in the regular lane
 
-Integration base: vllm fe341a53dda00472c281a2d1f4bd34a74e7eae6e after
-16-flash-next-fp4.patch.
+Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
+
+Apply after 16-flash-next-fp4.patch.
 Reference: local-inference-lab/vllm
 3a947437cf1eb734299de91370c9b37fcdbcc42b (B12xModelLoader and transfer hooks).
 
@@ -855,7 +856,7 @@ index b73267e8bdf624765747dc2249779ed460d70132..864c809a6dc1ca56192fa1ae11bd7336
      def weight_loader_v2(self, param: BasevLLMParameter, loaded_weight: torch.Tensor):
          # Special case for loading scales off disk, which often do not
 diff --git a/vllm/model_executor/layers/mamba/mamba_mixer2.py b/vllm/model_executor/layers/mamba/mamba_mixer2.py
-index bfa1103bb36811ef2a38f50475425cb82a1ee77a..cc4d246f6aa529e03739dc5efa26c2e38b17e60d 100644
+index e310aaf40f12244e815cfe8c779d54b85b7f081c..8a3b7ef8493f2b2f45a352ae42c8a3b333e8b78c 100644
 --- a/vllm/model_executor/layers/mamba/mamba_mixer2.py
 +++ b/vllm/model_executor/layers/mamba/mamba_mixer2.py
 @@ -59,6 +59,7 @@ from vllm.model_executor.model_loader.weight_utils import (
@@ -1200,7 +1201,7 @@ index 1a61795b4ac6f57382ad39968cb54655c61313d2..431c4ccbe5fe9844a61fb0ee0422f69b
          self.counter_after_loading_weights = time.perf_counter()
          logger.info_once(
 diff --git a/vllm/model_executor/model_loader/weight_utils.py b/vllm/model_executor/model_loader/weight_utils.py
-index ac1da8d6987ba6ee094f9d868b4f7c965cd386e8..d8ad7c2ba0d112bb4ba1c4e925aa383720726044 100644
+index 0a834cd90ca504374bef298025b8d976cdd810c7..52bd430ee04d73a3b2f5fe727afd09bd25e02679 100644
 --- a/vllm/model_executor/model_loader/weight_utils.py
 +++ b/vllm/model_executor/model_loader/weight_utils.py
 @@ -42,6 +42,7 @@ from vllm.model_executor.layers.quantization import (

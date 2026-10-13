@@ -2,7 +2,7 @@ Subject: [PATCH] Flash Next FP4 resident CSF scales and loading helpers
 
 Source-Patch: mods/draft/flash-next-fp4/flash-next-fp4-local.patch
 Source-SHA256: 80192a2d8213d7852d7c10eb982235a71da0f672d117478b8e83bb67b9df0462
-Integration-Base: fe341a53dda00472c281a2d1f4bd34a74e7eae6e
+Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
 
 Apply after #60646's CSF decoder and the existing draft vocabulary packaging.
 Keep resident CSF scales opt-in through VLLM_CSF_RESIDENT=1. Preserve the
@@ -21,10 +21,10 @@ index 6a104a60c3b3b676f436de8b09e6d0ba5bbe1682..b1790e48bdf8cbd00784a05f8fbf3667
          "entrypoints/serve/instrumentator/static/*.css",
          "distributed/kv_transfer/kv_connector/v1/hf3fs/utils/*.cpp",
 diff --git a/vllm/envs.py b/vllm/envs.py
-index a2b46030772f3845009fd837b5b55f6df1d11641..e2ab0a48d2d224016af4ebaf3770d8b2ff873160 100755
+index dbbc49ff59a837728465a7a160a3894badb229d6..3f4f683adb889198a15485b14bd37c7e68db32d4 100755
 --- a/vllm/envs.py
 +++ b/vllm/envs.py
-@@ -196,6 +196,11 @@ if TYPE_CHECKING:
+@@ -197,6 +197,11 @@ if TYPE_CHECKING:
      VLLM_HUMMING_USE_F16_ACCUM: bool = False
      VLLM_HUMMING_MOE_GEMM_TYPE: Literal["indexed", "grouped", "auto"] | None = None
      VLLM_B12X_MOE_FP4_FORCE_A16: bool = False
@@ -36,7 +36,7 @@ index a2b46030772f3845009fd837b5b55f6df1d11641..e2ab0a48d2d224016af4ebaf3770d8b2
      VLLM_DEEPEPLL_NVFP4_DISPATCH: bool = False
      VLLM_V1_USE_OUTLINES_CACHE: bool = False
      VLLM_TPU_USING_PATHWAYS: bool = False
-@@ -1695,6 +1700,27 @@ environment_variables: dict[str, Callable[[], Any]] = {
+@@ -1699,6 +1704,27 @@ environment_variables: dict[str, Callable[[], Any]] = {
      "VLLM_B12X_MOE_FP4_FORCE_A16": lambda: bool(
          int(os.getenv("VLLM_B12X_MOE_FP4_FORCE_A16", "0"))
      ),

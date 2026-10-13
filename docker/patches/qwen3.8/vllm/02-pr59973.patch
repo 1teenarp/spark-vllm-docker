@@ -2,8 +2,8 @@ From: stecasta
 Subject: [PATCH] [MRV2][Spec Decode] Quantized draft lm_head for drafters that share the target head
 
 Upstream-PR: https://github.com/vllm-project/vllm/pull/59973
-Upstream-Commit: 0c2ed06ac005871507645ecc63e05a28058e15bf
-Integration-Base: fe341a53dda00472c281a2d1f4bd34a74e7eae6e
+Upstream-Commit: ff04de5eb49bd6d2c4fab8812fed92528a29beb3
+Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
 
 Preserve #60937's native MRV2 weight reload and cache resets. Keep the
 quantized draft-head refresh in reset_lora_state for reloads and transfers.
@@ -413,7 +413,7 @@ index b916d7da2bed09362fbfd3593efb4d8f97abee3a..cb9573fd6b5f8f58d6107f2e5654fed3
              raise ValueError(
                  "Expected num_speculative_tokens to be greater "
 diff --git a/vllm/config/vllm.py b/vllm/config/vllm.py
-index f27c8418ab4df614a32affb9b34a30ac6f734604..65efe244184c7360128d07262063cd5daf9df930 100644
+index d6e834861a19a5bee291ac6098f327c66c2a21b2..86696928649505cc4ddbceefc7889eec5e0c064c 100644
 --- a/vllm/config/vllm.py
 +++ b/vllm/config/vllm.py
 @@ -2979,6 +2979,8 @@ class VllmConfig:
