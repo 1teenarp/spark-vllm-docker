@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -491,6 +491,91 @@ class PatchSeriesTests(unittest.TestCase):
                             speculator.supports_decode_metadata_update,
                             steps > 1 and stop is None and supported,
                         )
+
+    def test_resident_csf_preserves_modelopt_block_quant_dispatch(self):
+        # #59604 adds IQ2/Q8 dispatch at the resident-CSF insertion point.
+        _, updated = self.apply_upstream_excerpt(
+            "16-flash-next-fp4.patch",
+            "vllm/model_executor/layers/quantization/modelopt.py",
+            "modelopt_block_quant_upstream.py", ("+            and envs.VLLM_CSF_RESIDENT",),
+        )
+        linear = type("LinearBase", (), {})
+        embedding = type("VocabParallelEmbedding", (), {})
+        head = type("ParallelLMHead", (embedding,), {})
+        experts = type("RoutedExperts", (), {"moe_config": object()})
+        block_linear, block_moe, resident, state, regular = (Mock() for _ in range(5))
+        envs = SimpleNamespace(VLLM_CSF_RESIDENT=False)
+        namespace = {
+            "__name__": "series_quant.modelopt", "__package__": "series_quant",
+            "Attention": type("Attention", (), {}), "LinearBase": linear,
+            "VocabParallelEmbedding": embedding, "ParallelLMHead": head,
+            "RoutedExperts": experts, "envs": envs,
+            "B12X_BLOCK_CODECS": {"iq2_xs": (256, 74), "iq2_xxs": (256, 66),
+                                  "q8_0": (32, 34)},
+            "_BLOCK_FP8_MOE_ALGOS": set(), "ModelOptNvFp4FusedMoE": regular,
+        }
+        exec("from __future__ import annotations\n" + updated, namespace)
+        config = namespace["ModelOptMixedPrecisionConfig"]()
+        config.is_layer_excluded = lambda _: False
+        config._resolve_weight_scale_encoding = Mock(return_value="csf")
+        config._csf_state = None
+        config.nvfp4_config, config.w4a16_nvfp4_config = object(), object()
+        modules = {
+            "series_quant.modelopt_block_quant": SimpleNamespace(
+                ModelOptBlockQuantLinearMethod=block_linear,
+                ModelOptBlockQuantMoEMethod=block_moe,
+            ),
+            "series_quant.nvfp4_csf": SimpleNamespace(
+                Nvfp4CsfMoEMethod=resident, Nvfp4CsfState=state,
+            ),
+        }
+        with patch.dict("sys.modules", modules):
+            for enabled in (False, True):
+                envs.VLLM_CSF_RESIDENT = enabled
+                for codec in ("IQ2_XS", "IQ2_XXS", "Q8_0"):
+                    config._resolve_quant_algo = lambda _: codec
+                    for layer_type in (linear, embedding, head, experts):
+                        with self.subTest(enabled=enabled, codec=codec, layer=layer_type):
+                            layer = layer_type()
+                            factory = block_moe if layer_type is experts else block_linear
+                            self.assertIs(
+                                config.get_quant_method(layer, "model.layer"),
+                                factory.return_value,
+                            )
+                            args = (layer.moe_config,) if layer_type is experts else ()
+                            factory.assert_called_once_with(*args, codec=codec.lower())
+                            factory.reset_mock()
+                    with self.assertRaisesRegex(ValueError, "requires a linear"):
+                        config.get_quant_method(object(), "model.layer")
+            config._resolve_weight_scale_encoding.assert_not_called()
+            resident.assert_not_called()
+            state.assert_not_called()
+
+            layer = experts()
+            for algo, subconfig in (("NVFP4", config.nvfp4_config),
+                                    ("W4A16_NVFP4", config.w4a16_nvfp4_config)):
+                config._resolve_quant_algo = lambda _: algo
+                for enabled, encoding in ((False, "csf"), (True, None), (True, "csf")):
+                    with self.subTest(algo=algo, enabled=enabled, encoding=encoding):
+                        envs.VLLM_CSF_RESIDENT = enabled
+                        config._resolve_weight_scale_encoding.return_value = encoding
+                        result = config.get_quant_method(layer, "model.layer")
+                        if enabled and encoding == "csf":
+                            self.assertIs(result, resident.return_value)
+                            resident.assert_called_once_with(
+                                layer.moe_config, state.return_value,
+                                use_a16=algo == "W4A16_NVFP4",
+                            )
+                            regular.assert_not_called()
+                        else:
+                            self.assertIs(result, regular.return_value)
+                            regular.assert_called_once_with(
+                                quant_config=subconfig, moe_config=layer.moe_config,
+                            )
+                            resident.assert_not_called()
+                        resident.reset_mock()
+                        regular.reset_mock()
+            state.assert_called_once_with()
 
     def test_resident_csf_loader_preserves_default_decoding(self):
         _, updated = self.apply_upstream_excerpt(

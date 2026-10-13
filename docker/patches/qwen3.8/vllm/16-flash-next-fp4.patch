@@ -2,14 +2,15 @@ Subject: [PATCH] Flash Next FP4 resident CSF scales and loading helpers
 
 Source-Patch: mods/draft/flash-next-fp4/flash-next-fp4-local.patch
 Source-SHA256: 80192a2d8213d7852d7c10eb982235a71da0f672d117478b8e83bb67b9df0462
-Integration-Base: 12b005eefa06f97eeebfae3e14bcac5fa3b81197
+Integration-Base: 624a5ddafd96df23fe2b9f6d4b8f52a08b9fe9ea
 
 Apply after #60646's CSF decoder and the existing draft vocabulary packaging.
 Keep resident CSF scales opt-in through VLLM_CSF_RESIDENT=1. Preserve the
 mod's vocabulary path alongside the identical existing vocabulary.
+Preserve #59604's IQ2/Q8 dispatch before the resident-CSF NVFP4 path.
 
 diff --git a/setup.py b/setup.py
-index 6a104a60c3b3b676f436de8b09e6d0ba5bbe1682..b1790e48bdf8cbd00784a05f8fbf3667f094bc17 100644
+index 8b9016b13b1f1b7b458f354f143709a1aa8efb4b..3122227aeaf6a037b5f6a5eeab43d11d9863d389 100644
 --- a/setup.py
 +++ b/setup.py
 @@ -1603,6 +1603,7 @@ package_data = {
@@ -412,10 +413,10 @@ index 0000000000000000000000000000000000000000..6c68f97c313085d3dce9950df3053d47
 +    def moe_sum(self, input: torch.Tensor, output: torch.Tensor) -> None:
 +        raise NotImplementedError("LoRA is not supported for B12xCsfExperts")
 diff --git a/vllm/model_executor/layers/fused_moe/routed_experts.py b/vllm/model_executor/layers/fused_moe/routed_experts.py
-index ae5829a311d92c326d59aee4de745b85e757d24a..bd08c27627dc64267080c74ec0a4a318a90275e3 100644
+index 71f4206008c5d287490ac8cde947be3254900aed..59f519ce1c28f88b42cebb182cdde6ebd49cbaec 100644
 --- a/vllm/model_executor/layers/fused_moe/routed_experts.py
 +++ b/vllm/model_executor/layers/fused_moe/routed_experts.py
-@@ -1011,7 +1011,15 @@ class RoutedExperts(PluggableLayer):
+@@ -1019,7 +1019,15 @@ class RoutedExperts(PluggableLayer):
                  )
                  weight_name = qual_name.replace(weight_name, param_name)
                  param_name = weight_name.removeprefix(f"{self.layer_name}.")
@@ -433,10 +434,10 @@ index ae5829a311d92c326d59aee4de745b85e757d24a..bd08c27627dc64267080c74ec0a4a318
                      if param_name.endswith(("w13_bias", "w2_bias")):
                          continue
 diff --git a/vllm/model_executor/layers/quantization/modelopt.py b/vllm/model_executor/layers/quantization/modelopt.py
-index 98af93c30fad1ec892020bb5d342f0aed24b5d3c..f2844ee99a8e95dda015ebc8cf185da2258f6500 100644
+index 8354f885d917bd2cb691dddb326455ce4dd467c2..69b054869f3b22da26835866f8b776645e111f18 100644
 --- a/vllm/model_executor/layers/quantization/modelopt.py
 +++ b/vllm/model_executor/layers/quantization/modelopt.py
-@@ -1563,6 +1563,7 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
+@@ -1580,6 +1580,7 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
          self.nvfp4_config = nvfp4_config
          self.w4a16_nvfp4_config = w4a16_nvfp4_config
          self.mxfp8_config = mxfp8_config
@@ -444,7 +445,7 @@ index 98af93c30fad1ec892020bb5d342f0aed24b5d3c..f2844ee99a8e95dda015ebc8cf185da2
  
          block_sizes = {
              int(layer_info.get("group_size", 128))
-@@ -1775,6 +1776,21 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
+@@ -1792,6 +1793,21 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
  
          return None
  
@@ -466,9 +467,9 @@ index 98af93c30fad1ec892020bb5d342f0aed24b5d3c..f2844ee99a8e95dda015ebc8cf185da2
      @staticmethod
      def _quantized_layer_prefix_candidates(prefix: str) -> tuple[str, ...]:
          candidates = [prefix]
-@@ -1811,6 +1827,21 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
- 
-         quant_algo = self._resolve_quant_algo(prefix)
+@@ -1844,6 +1860,21 @@ class ModelOptMixedPrecisionConfig(ModelOptQuantConfigBase):
+                 f"{quant_algo} requires a linear, embedding or routed experts"
+             )
  
 +        if (
 +            isinstance(layer, RoutedExperts)

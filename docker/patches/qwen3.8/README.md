@@ -56,6 +56,22 @@ W4A4 MoE), then [#5943](https://github.com/flashinfer-ai/flashinfer/pull/5943)
 
 ## Integration and refresh
 
+Later on October 13, patch 16 was rebased on vLLM
+`624a5ddafd96df23fe2b9f6d4b8f52a08b9fe9ea` after
+[#59604](https://github.com/vllm-project/vllm/pull/59604) added IQ2/Q8 ModelOpt
+dispatch at the resident-CSF insertion point. The reported `modelopt.py`
+conflict reproduces on this base. The refreshed patch retains upstream block
+quantization dispatch before the opt-in resident-CSF NVFP4 path, preserving
+both features. No upstream PR revisions or series selection changed.
+
+The full 16-patch vLLM series replays cleanly and reproduces the prepared source
+tree. All 17 Docker source patchers pass, all 129 changed Python files compile,
+and both draft vocabularies remain packaged. The 15 series tests, 100
+build-selection checks, and 28 CPU loader tests pass; the native-reader test
+is skipped. The new regression fails with the previous patch and covers
+IQ2/Q8 linear, embedding, and expert dispatch, plus resident-CSF opt-in and
+default NVFP4 dispatch. GPU compilation and inference remain for CI.
+
 All 18 patches were refreshed on October 13, 2026 against upstream vLLM
 `12b005eefa06f97eeebfae3e14bcac5fa3b81197` and FlashInfer
 `74ca44b318a3be013649baabca698099d0862e3c`. Eight referenced PR heads changed:
