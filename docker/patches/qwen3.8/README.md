@@ -56,6 +56,19 @@ W4A4 MoE), then [#5943](https://github.com/flashinfer-ai/flashinfer/pull/5943)
 
 ## Integration and refresh
 
+The host-file-gather implementation in `01-pr59958.patch` now implements the
+current PLE base class's `finalize_prefetch` method and single-argument
+`start_prefetch` signature. File gather keeps synchronous row staging and
+rejects prefetch finalization, as the device backend does. This fixes the
+abstract-class construction error before weight loading with both `safetensors`
+and `b12x`. Rebuild the regular vLLM wheel and runner to include the correction.
+The dependency-free series regression reproduces the original exception, and
+the patch includes construction checks for BF16, FP8, and NVFP4 with dummy,
+safetensors, and b12x load configurations. All nine constructor cases pass with
+CPU tensors and mocked platform services. The full series and all 17 Docker
+source patchers replay on the base below; 13 series tests and 28 CPU loader
+tests pass. Full checkpoint loading and Spark inference remain unverified.
+
 `17-flash-next-b12x-loader.patch` follows patch 16, bringing the series to 16
 vLLM patches and 2 FlashInfer patches. It adapts the loader and transfer hooks
 from `local-inference-lab/vllm` commit

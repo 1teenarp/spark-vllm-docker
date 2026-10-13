@@ -2,6 +2,7 @@
 """Exercise source-series application and lane guards without Docker or GPUs."""
 
 import ast
+from abc import ABC, abstractmethod
 from contextlib import contextmanager
 import os
 from pathlib import Path
@@ -333,6 +334,27 @@ class PatchSeriesTests(unittest.TestCase):
                     self.assertEqual(
                         call.kwargs["use_eagle"], eagle and not lookahead and group == 0
                     )
+
+    def test_file_gather_implements_embedding_interface(self):
+        _, updated = self.apply_upstream_excerpt(
+            "01-pr59958.patch", "vllm/models/qwen4_exp/nvidia/ngram_embedding.py",
+            "ple_file_gather_interface_upstream.py",
+            ("class Qwen4ExpPLEFileGatherEmbedding",),
+        )
+        namespace = {
+            "ABC": ABC, "abstractmethod": abstractmethod,
+            "PLEVocabParallelEmbedding": type("PLEVocabParallelEmbedding", (), {}),
+            "nn": SimpleNamespace(Module=object),
+        }
+        exec("from __future__ import annotations\n" + updated, namespace)
+        embedding_cls = namespace["Qwen4ExpPLEFileGatherEmbedding"]
+        # Allocation alone enforces ABC completeness, before tensor allocation
+        # or loading weights. This is the startup failure with either loader.
+        embedding = embedding_cls.__new__(embedding_cls)
+        self.assertFalse(embedding.supports_prefetch)
+        self.assertIsNone(embedding.start_prefetch(object()))
+        with self.assertRaisesRegex(RuntimeError, "does not support prefetch"):
+            embedding.finalize_prefetch(total_tokens=4)
 
     def test_ple_sequence_parallel_preserves_full_token_rows(self):
         _, updated = self.apply_upstream_excerpt(
