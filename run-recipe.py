@@ -448,10 +448,9 @@ def check_model_exists(model: str) -> bool:
     """
     Check if a model exists in the HuggingFace cache.
 
-    Checks the standard HF cache location for completed downloads.
+    Uses the same cache environment variables and path expansion as hf-download.sh.
 
     EXTENSIBILITY:
-    - To support custom cache locations: Add HF_HOME env var support
     - To verify model integrity: Check for complete snapshot with config.json
     - To support other model sources: Add URL/path prefix detection
 
@@ -464,7 +463,15 @@ def check_model_exists(model: str) -> bool:
     # Convert model name to cache directory format
     # e.g., "Salyut1/GLM-4.7-NVFP4" -> "models--Salyut1--GLM-4.7-NVFP4"
     cache_name = f"models--{model.replace('/', '--')}"
-    cache_path = Path.home() / ".cache" / "huggingface" / "hub" / cache_name
+    cache_home = os.path.expandvars(os.path.expanduser(os.environ.get(
+        "HF_HOME", os.path.join(os.environ.get("XDG_CACHE_HOME", "~/.cache"), "huggingface")
+    )))
+    hub_path = os.path.expandvars(os.path.expanduser(os.environ.get(
+        "HF_HUB_CACHE", os.environ.get("HUGGINGFACE_HUB_CACHE", os.path.join(cache_home, "hub"))
+    )))
+    if not hub_path:
+        return False
+    cache_path = Path(hub_path) / cache_name
 
     if cache_path.exists():
         # Check for snapshots directory which indicates complete download
@@ -1319,6 +1326,12 @@ Examples:
     # --- Run Phase ---
     if args.build_only or args.download_only:
         return 0
+
+    # Require the recipe's model locally before starting a container.
+    if not args.dry_run and model and not check_model_exists(model):
+        print(f"Error: Model '{model}' not found in the local Hugging Face cache.")
+        print("Rerun the same command with --setup to download the model before launching.")
+        return 1
 
     # Check if image exists (if not using --setup)
     if not args.dry_run and not args.setup and not check_image_exists(container):
