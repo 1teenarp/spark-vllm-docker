@@ -329,6 +329,10 @@ for additional launcher options.
 
 ## CHANGELOG
 
+### 2026-10-16
+
+'glm-5.3-flash` recipe now uses a new FP4-Local checkpoint from NVIDIA, replacing an older version hosted in local-inference-lab repository. As with Qwen, this checkpoint features compressed scales and is QAD quantized. Up to 2M KV cache on dual Sparks!
+
 ### 2026-10-15
 
 #### Qwen 3.8 Flash Next recipes updated
