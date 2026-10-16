@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recipe model preflight tests without Docker, downloads, or live nodes."""
+"""Recipe preflight and environment tests without Docker, downloads, or live nodes."""
 
 import builtins
 import contextlib
@@ -7,6 +7,7 @@ import importlib.util
 import io
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,94 @@ class ModelPreflightTests(unittest.TestCase):
                 self.cache_model(hub=hub)
                 result, output = self.run_recipe()
                 self.assertEqual(result, 0, output)
+
+
+class EnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.recipe = self.root / "recipe.yaml"
+        self.defaults = {
+            "VLLM_PLE_TABLE_MEMORY": "shared",
+            "B12X_DISK_BACKEND": "mmap",
+            "NUMERIC": 4,
+            "JSON_VALUE": '{"strategy": "SPREAD", "label": "a=b"}',
+            "EMPTY": "",
+        }
+        self.recipe.write_text(runner.yaml.safe_dump({
+            "recipe_version": "1", "name": "Environment test", "container": "test-image",
+            "env": self.defaults,
+            "command": 'printf "%s\\n" "$VLLM_PLE_TABLE_MEMORY" "$B12X_DISK_BACKEND"',
+        }))
+
+    def run_recipe(self, *flags, mode=("--solo",)):
+        argv = ["run-recipe.py", str(self.recipe), "--config", "/dev/null", *mode, *flags]
+        output = io.StringIO()
+        launched = {}
+
+        def launch(command):
+            launched["args"] = command
+            launched["script"] = Path(command[command.index("--launch-script") + 1]).read_text()
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(output), \
+                patch.object(runner, "ENV_FILE", None), \
+                patch.object(runner, "check_image_exists", return_value=True), \
+                patch.object(runner.subprocess, "run", side_effect=launch):
+            result = runner.main()
+        self.assertEqual(result, 0, output.getvalue())
+        return output.getvalue(), launched
+
+    @staticmethod
+    def env_args(args):
+        return [args[i + 1] for i, arg in enumerate(args) if arg == "-e"]
+
+    def test_recipe_environment_reaches_launcher_in_solo_native_and_ray_modes(self):
+        for mode in (("--solo",), ("-n", "192.0.2.1,192.0.2.2"),
+                     ("-n", "192.0.2.1,192.0.2.2", "--ray")):
+            with self.subTest(mode=mode):
+                _, launched = self.run_recipe(mode=mode)
+                actual = self.env_args(launched["args"])
+                self.assertCountEqual(actual, [f"{key}={value}" for key, value in self.defaults.items()])
+                self.assertNotIn("export ", launched["script"])
+
+    def test_cli_overrides_are_effective_and_dry_run_matches_launch(self):
+        flags = ("-e", "VLLM_PLE_TABLE_MEMORY=shared", "-e", "VLLM_PLE_TABLE_MEMORY=disk",
+                 "-e", "B12X_DISK_BACKEND=io_uring", "-e", "CLI_ONLY=a=b c", "-e", "NUMERIC=")
+        _, launched = self.run_recipe(*flags)
+        actual = self.env_args(launched["args"])
+        expected = {**self.defaults, "VLLM_PLE_TABLE_MEMORY": "disk",
+                    "B12X_DISK_BACKEND": "io_uring", "CLI_ONLY": "a=b c", "NUMERIC": ""}
+        self.assertCountEqual(actual, [f"{key}={value}" for key, value in expected.items()])
+        # Execute only the harmless printf recipe using the environment sent to Docker.
+        result = subprocess.run(["bash", "-c", launched["script"]],
+                                env=dict(item.split("=", 1) for item in actual),
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "disk\nio_uring\n")
+        output, dry_launch = self.run_recipe("--dry-run", *flags)
+        self.assertEqual(dry_launch, {})
+        launch_line = next(line for line in output.splitlines() if line.startswith("   ./launch-cluster.sh"))
+        self.assertEqual(self.env_args(shlex.split(launch_line.rstrip(" \\"))), actual)
+        self.assertNotIn("export ", output)
+
+    def test_bare_cli_variable_replaces_recipe_assignment(self):
+        _, launched = self.run_recipe("-e", "VLLM_PLE_TABLE_MEMORY")
+        actual = self.env_args(launched["args"])
+        self.assertIn("VLLM_PLE_TABLE_MEMORY", actual)
+        self.assertNotIn("VLLM_PLE_TABLE_MEMORY=shared", actual)
+
+    def test_missing_empty_and_null_recipe_environment_allow_cli_variables(self):
+        recipe = runner.yaml.safe_load(self.recipe.read_text())
+        for env in (None, {}, "missing"):
+            with self.subTest(env=env):
+                if env == "missing":
+                    recipe.pop("env", None)
+                else:
+                    recipe["env"] = env
+                self.recipe.write_text(runner.yaml.safe_dump(recipe))
+                _, launched = self.run_recipe("-e", "CLI_ONLY=value")
+                self.assertEqual(self.env_args(launched["args"]), ["CLI_ONLY=value"])
 
 
 if __name__ == "__main__":
