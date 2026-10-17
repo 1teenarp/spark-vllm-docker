@@ -8,7 +8,7 @@ CONTAINER_WORKSPACE_DIR="/workspace"
 CONTAINER_EXEC_SCRIPT="$CONTAINER_WORKSPACE_DIR/exec-script.sh"
 # Modify these if you want to pass additional docker args or set VLLM_SPARK_EXTRA_DOCKER_ARGS variable
 DOCKER_ARGS="-e NCCL_IGNORE_CPU_AFFINITY=1"
-DOCKER_ARGS="$DOCKER_ARGS -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+# DOCKER_ARGS="$DOCKER_ARGS -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 DOCKER_ARGS="$DOCKER_ARGS -v $HF_CACHE_DIR:/root/.cache/huggingface"
 
 # Append additional arguments from environment variable
@@ -18,6 +18,7 @@ fi
 
 # ETH_IF and IB_IF will be auto-detected if not provided
 ETH_IF=""
+ETH_IF_OVERRIDE=""
 IB_IF=""
 NCCL_DEBUG_VAL=""
 MASTER_PORT="29501"
@@ -55,6 +56,8 @@ SHM_SIZE_GB="64"
 NOFILE_LIMIT="${VLLM_SPARK_NOFILE_LIMIT:-1048576}"
 PORT_MAPPINGS=()
 VOLUME_MAPPINGS=()
+CONTAINER_ENV_ARGS=()
+CLI_ENV_ARGS=()
 ENABLE_EARLYOOM="false"
 EARLYOOM_ARGS="${VLLM_SPARK_EARLYOOM_ARGS:--M 524288,102400 -s 100 -r 60}"
 
@@ -81,7 +84,7 @@ usage() {
     echo "  --no-ray        Default for multi-node vLLM without Ray (accepted for compatibility)"
     echo "  --no-cache-dirs Do not mount default cache directories (~/.cache/vllm, ~/.cache/flashinfer, ~/.cache/b12x, ~/.triton, ~/.tilelang)"
     echo "  --keep-entrypoint Keep the Docker image entrypoint instead of clearing it by default"
-    echo "  --earlyoom      Run earlyoom as the container foreground process instead of sleep infinity"
+    echo "  --earlyoom      Run earlyoom as the container foreground process (install it with apt-get if missing)"
     echo "  --earlyoom-args Arguments passed to earlyoom (default: '-M 524288,102400 -s 100 -r 60')"
     echo "  -d              Daemon mode (only for 'start' action)"
     echo "  --non-privileged Run in non-privileged mode (removes --privileged and --ipc=host)"
@@ -109,7 +112,7 @@ usage() {
     echo "  IB_IF               InfiniBand interface name"
     echo "  MASTER_PORT         Port for cluster coordination (default: 29501)"
     echo "  CONTAINER_NAME      Container name (default: vllm_node)"
-    echo "  LOCAL_IP            Local IP address (for solo mode or override auto-detection)"
+    echo "  LOCAL_IP            Cluster local IP override (solo mode uses loopback)"
     echo "  CONTAINER_*         Any variable starting with CONTAINER_ (except CONTAINER_NAME)"
     echo "                      becomes -e flag. Example: CONTAINER_NCCL_DEBUG=INFO -> -e NCCL_DEBUG=INFO"
     echo ""
@@ -177,9 +180,9 @@ while [[ "$#" -gt 0 ]]; do
         -n|--nodes) NODES_ARG="$2"; shift ;;
         -t) IMAGE_NAME="$2"; shift ;;
         --name) CONTAINER_NAME="$2"; shift ;;
-        --eth-if) ETH_IF="$2"; shift ;;
+        --eth-if) ETH_IF="$2"; ETH_IF_OVERRIDE="$2"; shift ;;
         --ib-if) IB_IF="$2"; shift ;;
-        -e|--env) DOCKER_ARGS="$DOCKER_ARGS -e $2"; shift ;;
+        -e|--env) CLI_ENV_ARGS+=("-e" "$2"); shift ;;
         -j) BUILD_JOBS="$2"; shift ;;
         --apply-mod) MOD_PATHS+=("$2"); MOD_TYPES+=("path"); shift ;;
         --apply-vllm-pr)
@@ -280,11 +283,11 @@ if [[ -f "$CONFIG_FILE" ]]; then
     echo "Loading configuration from .env file..."
     
     # Validate .env file syntax
-    if ! python3 -c "
+    if ! python3 - "$CONFIG_FILE" <<'PYENV'
 import sys
 import re
 
-env_file = '$CONFIG_FILE'
+env_file = sys.argv[1]
 seen_keys = set()
 
 with open(env_file, 'r') as f:
@@ -314,7 +317,8 @@ with open(env_file, 'r') as f:
         seen_keys.add(key)
 
 sys.exit(0)
-" 2>/dev/null; then
+PYENV
+    then
         echo "Error: Invalid .env file syntax. Aborting."
         exit 1
     fi
@@ -331,19 +335,16 @@ sys.exit(0)
         # Skip if key is empty after trimming
         [[ -z "$key" ]] && continue
         
-        # Remove quotes and whitespace from value using Python for proper shlex handling
-        value=$(python3 -c "
-import shlex
+        # Pass data as an argument, not Python source (JSON uses both quote types).
+        value=$(python3 - "$value" <<'PYENV'
 import sys
-value = '''$value'''
-# Strip whitespace
-value = value.strip()
-# Remove surrounding quotes if present
-if (value.startswith('\"') and value.endswith('\"')) or (value.startswith(\"'\" ) and value.endswith(\"'\")):
+value = sys.argv[1].strip()
+if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
     value = value[1:-1]
 print(value)
-")
-        
+PYENV
+        ) || exit 1
+
         # Export with DOTENV_ prefix
         export "DOTENV_$key=$value"
     done < "$CONFIG_FILE"
@@ -429,13 +430,13 @@ for env_var in $(compgen -v DOTENV_CONTAINER_); do
     # Extract the actual env var name (remove DOTENV_CONTAINER_ prefix)
     actual_var="${env_var#DOTENV_CONTAINER_}"
     
-    # Properly escape the value for shell using Python
-    escaped_value=$(python3 -c "import shlex; print(shlex.quote('$value'))")
-    
-    # Add to docker args
-    DOCKER_ARGS="$DOCKER_ARGS -e $actual_var=$escaped_value"
+    CONTAINER_ENV_ARGS+=("-e" "$actual_var=$value")
     echo "Adding container env: $actual_var"
 done
+
+# Explicit -e flags (including recipe defaults supplied by run-recipe.py) win
+# over saved CONTAINER_* settings. Keep each value intact on every node.
+CONTAINER_ENV_ARGS+=("${CLI_ENV_ARGS[@]}")
 
 # Add build job parallelization environment variables if BUILD_JOBS is set
 if [[ -n "$BUILD_JOBS" ]]; then
@@ -572,11 +573,8 @@ if [[ "${FORCE_DISCOVER:-false}" == "true" ]]; then
 fi
 
 if [[ "$SOLO_MODE" == "true" ]]; then
-    # Solo mode: skip node detection, just get local IP
-    # Use LOCAL_IP from .env if set, otherwise default to 127.0.0.1
-    if [[ -z "$LOCAL_IP" ]]; then
-        LOCAL_IP="127.0.0.1"
-    fi
+    # Solo mode: skip network detection and ignore any saved cluster IP.
+    LOCAL_IP="127.0.0.1"
     NODES_ARG="$LOCAL_IP"
     PEER_NODES=()
     echo "Solo mode enabled. Skipping node detection."
@@ -620,6 +618,8 @@ fi
 if [[ "$SOLO_MODE" == "false" && ${#PEER_NODES[@]} -eq 0 ]]; then
     echo "Only local node detected/configured. Activating solo mode (no Ray cluster)."
     SOLO_MODE="true"
+    LOCAL_IP="127.0.0.1"
+    HEAD_IP="$LOCAL_IP"
 fi
 
 if [[ "$SOLO_MODE" == "true" ]]; then
@@ -640,6 +640,22 @@ fi
 if [[ ${#PORT_MAPPINGS[@]} -gt 0 && "$SOLO_MODE" != "true" ]]; then
     echo "Error: -p/--publish port forwarding is only supported in solo mode. Use --solo or remove port mappings for cluster mode."
     exit 1
+fi
+
+# Validate saved topology before installing cleanup traps or touching containers.
+# Account for the launcher trimming ranks to the command's parallelism sizes.
+if [[ "$SOLO_MODE" != true && -n "${DOTENV_CLUSTER_LINKS:-}" && "$ACTION" != stop && "$ACTION" != status ]]; then
+    topology_command="$COMMAND_TO_RUN"
+    if [[ "$LAUNCH_SCRIPT_MODE" == true ]]; then
+        topology_command=$(cat "$LAUNCH_SCRIPT_PATH") || exit 1
+    fi
+    topology_options=()
+    [[ "$NO_RAY_MODE" == true ]] || topology_options+=(--ray)
+    topology_nodes=$(IFS=,; echo "$HEAD_IP${PEER_NODES[*]:+,${PEER_NODES[*]}}")
+    topology_env_args=$(python3 -c 'import shlex, sys; print(shlex.join(sys.argv[1:]))' "${CONTAINER_ENV_ARGS[@]}")
+    topology_env=$(TOPOLOGY_DOCKER_ARGS="$DOCKER_ARGS $topology_env_args" python3 "$SCRIPT_DIR/cluster_topology.py" validate \
+        --nodes "$topology_nodes" --command "$topology_command" "${topology_options[@]}") || exit 1
+    DOCKER_ARGS="$DOCKER_ARGS $topology_env"
 fi
 
 echo "Head Node: $HEAD_IP"
@@ -674,7 +690,7 @@ if [[ "$CHECK_CONFIG" == "true" ]]; then
     echo "  Image Name: $IMAGE_NAME"
     echo "  ETH Interface: $ETH_IF"
     echo "  IB Interface: $IB_IF"
-    echo "  Docker Args: $DOCKER_ARGS"
+    echo "  Docker Args: $DOCKER_ARGS ${CONTAINER_ENV_ARGS[*]}"
     if [[ ${#PORT_MAPPINGS[@]} -gt 0 ]]; then
         echo "  Docker Network: default bridge with published ports: ${PORT_MAPPINGS[*]}"
     else
@@ -1312,6 +1328,20 @@ copy_script_to_worker() {
 # Build -e KEY=VALUE flags for a given node IP (used in docker run and docker exec)
 get_env_flags() {
     local node_ip="$1"
+    if [[ "$SOLO_MODE" == "true" ]]; then
+        # vLLM creates process groups even for one GPU. Keep their bootstrap
+        # local, including with bridge networking or a saved cluster config.
+        # docker run appends user environment flags after these defaults.
+        local solo_if="${ETH_IF_OVERRIDE:-lo}"
+        printf -- '-e %s ' \
+            "VLLM_HOST_IP=$node_ip" \
+            "NCCL_SOCKET_IFNAME=$solo_if" \
+            "NCCL_IB_DISABLE=1" \
+            "GLOO_SOCKET_IFNAME=$solo_if" \
+            "TP_SOCKET_IFNAME=$solo_if"
+        return
+    fi
+
     printf -- '-e %s ' \
         "VLLM_HOST_IP=$node_ip" \
         "RAY_NODE_IP_ADDRESS=$node_ip" \
@@ -1349,16 +1379,63 @@ start_ray_worker() {
           --address=$HEAD_IP:$MASTER_PORT --node-ip-address $worker_ip >> /proc/1/fd/1 2>&1'"
 }
 
-container_keepalive_command() {
-    if [[ "$ENABLE_EARLYOOM" == "true" ]]; then
-        printf 'earlyoom %s' "$EARLYOOM_ARGS"
+ensure_container_earlyoom() {
+    local node_ip="$1"; local is_local="$2"
+    [[ "$ENABLE_EARLYOOM" == "true" ]] || return 0
+
+    echo "Preparing earlyoom in container '$CONTAINER_NAME' on $node_ip..."
+    local setup_script
+    setup_script=$(cat <<'EARLYOOM_SETUP'
+set -e
+if ! command -v earlyoom >/dev/null 2>&1; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+        echo "Error: earlyoom is missing and apt-get is unavailable; automatic installation requires an Ubuntu/Debian-based container." >&2
+        exit 1
+    fi
+    echo "earlyoom is missing; installing it with apt-get..."
+    if ! apt-get update; then
+        echo "Error: apt-get update failed while preparing earlyoom. Check the package repository, network, and permissions errors above." >&2
+        exit 1
+    fi
+    if ! DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends earlyoom; then
+        echo "Error: apt-get could not install earlyoom. See the package manager errors above." >&2
+        exit 1
+    fi
+    if ! command -v earlyoom >/dev/null 2>&1; then
+        echo "Error: Package installation completed, but earlyoom is still unavailable in the container PATH." >&2
+        exit 1
+    fi
+    # Release PID 1 only after apt-get has finished configuring the package.
+    touch /tmp/vllm-spark-earlyoom-ready
+fi
+for ((attempt = 0; attempt < 10; attempt++)); do
+    if IFS= read -r comm < /proc/1/comm && [[ "$comm" == "earlyoom" ]]; then
+        exit 0
+    fi
+    sleep 1
+done
+echo "Error: earlyoom did not start as the container foreground process. Check its arguments and the container logs." >&2
+exit 1
+EARLYOOM_SETUP
+)
+    # Install as root even when the image specifies a non-root default user.
+    # Override WORKDIR because some third-party images omit their /workspace.
+    local setup_cmd=(docker exec --user 0 -w / "$CONTAINER_NAME" bash -c "$setup_script")
+    if [[ "$is_local" == "false" ]]; then
+        local remote_cmd
+        printf -v remote_cmd '%q ' "${setup_cmd[@]}"
+        setup_cmd=(ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$node_ip" "$remote_cmd")
+    fi
+    if "${setup_cmd[@]}"; then
+        return 0
     else
-        printf 'sleep infinity'
+        echo "Error: Could not prepare earlyoom in container '$CONTAINER_NAME' (image '$IMAGE_NAME') on $node_ip." >&2
+        echo "       Restart the launch without --earlyoom (and without --earlyoom-args, which also enables it)." >&2
+        return 1
     fi
 }
 
-# Verify that the selected image resolves to the same content-addressable image
-# ID on the head and every worker before starting any containers.
+# Verify matching IDs or equivalent image content before starting containers.
 verify_cluster_image_consistency() {
     if [[ ${#PEER_NODES[@]} -eq 0 ]]; then
         return 0
@@ -1379,6 +1456,8 @@ verify_cluster_image_consistency() {
 
     local worker
     local worker_image_id
+    local head_fingerprint="" worker_fingerprint
+    local head_fingerprint_checked=false
     local image_error=false
     for worker in "${PEER_NODES[@]}"; do
         if ! worker_image_id=$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$worker" "$inspect_cmd" 2>/dev/null) || [[ -z "$worker_image_id" ]]; then
@@ -1386,6 +1465,30 @@ verify_cluster_image_consistency() {
             echo "       The image may be missing or inaccessible to the remote user."
             image_error=true
         elif [[ "$worker_image_id" != "$head_image_id" ]]; then
+            # IDs can represent configs, manifests, or indexes depending on the
+            # Docker image store. Fingerprint the resolved image content locally;
+            # workers need only Docker, not Python or a repository checkout.
+            if [[ "$head_fingerprint_checked" == "false" ]]; then
+                head_fingerprint_checked=true
+                head_fingerprint=$(
+                    set -o pipefail
+                    docker image inspect "$head_image_id" |
+                        python3 "$SCRIPT_DIR/docker/image_identity.py"
+                ) 2>/dev/null || head_fingerprint=""
+            fi
+            if [[ -n "$head_fingerprint" ]]; then
+                local content_inspect_cmd
+                printf -v content_inspect_cmd 'docker image inspect %q' "$worker_image_id"
+                worker_fingerprint=$(
+                    set -o pipefail
+                    ssh -o BatchMode=yes -o StrictHostKeyChecking=no "$worker" "$content_inspect_cmd" |
+                        python3 "$SCRIPT_DIR/docker/image_identity.py"
+                ) 2>/dev/null || worker_fingerprint=""
+                if [[ "$worker_fingerprint" == "$head_fingerprint" ]]; then
+                    echo "  [WORKER] $worker: $worker_image_id (matching image content)"
+                    continue
+                fi
+            fi
             echo "Error: Docker image mismatch on worker node ($worker):"
             echo "       Head:   $head_image_id"
             echo "       Worker: $worker_image_id"
@@ -1434,20 +1537,32 @@ start_cluster() {
         done
     fi
 
-    local docker_args_common="--gpus all -d --rm $docker_network_args --name $CONTAINER_NAME $docker_entrypoint_args $DOCKER_ARGS $IMAGE_NAME"
+    local docker_args_common="--gpus all -d --rm $docker_network_args --name $CONTAINER_NAME $docker_entrypoint_args $DOCKER_ARGS"
     local docker_caps_args=""
     local docker_resource_args=""
 
     if [[ "$NON_PRIVILEGED_MODE" == "true" ]]; then
         echo "Running in non-privileged mode..."
         docker_caps_args="--cap-add=IPC_LOCK"
-        docker_resource_args="--ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} --shm-size=${SHM_SIZE_GB}g --device=/dev/infiniband --memory ${MEM_LIMIT_GB}g --memory-swap ${MEM_SWAP_LIMIT_GB}g --pids-limit ${PIDS_LIMIT}"
+        docker_resource_args="--ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} --ulimit memlock=-1:-1 --shm-size=${SHM_SIZE_GB}g --device=/dev/infiniband --memory ${MEM_LIMIT_GB}g --memory-swap ${MEM_SWAP_LIMIT_GB}g --pids-limit ${PIDS_LIMIT}"
     else
         docker_caps_args="--privileged"
-        docker_resource_args="--ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} --ipc=host"
+        docker_resource_args="--ulimit nofile=${NOFILE_LIMIT}:${NOFILE_LIMIT} --ulimit memlock=-1:-1 --ipc=host"
     fi
-    local keepalive_cmd
-    keepalive_cmd="$(container_keepalive_command)"
+    local keepalive_cmd=(sleep infinity)
+    if [[ "$ENABLE_EARLYOOM" == "true" ]]; then
+        local earlyoom_args=()
+        read -r -a earlyoom_args <<< "$EARLYOOM_ARGS"
+        # Keep the container alive for docker exec to install a missing binary,
+        # then replace the shell so earlyoom remains PID 1.
+        keepalive_cmd=(bash -c '
+            if ! command -v earlyoom >/dev/null 2>&1; then
+                trap "exit 1" TERM INT
+                while [[ ! -e /tmp/vllm-spark-earlyoom-ready ]]; do sleep 1; done
+            fi
+            exec earlyoom "$@"
+        ' earlyoom "${earlyoom_args[@]}")
+    fi
 
     # Start Head Node
     echo "Starting Head Node on $HEAD_IP..."
@@ -1457,7 +1572,9 @@ start_cluster() {
         done
     fi
     docker run $docker_caps_args $docker_resource_args \
-        $(get_env_flags "$HEAD_IP") $docker_args_common $keepalive_cmd
+        $(get_env_flags "$HEAD_IP") $docker_args_common \
+        "${CONTAINER_ENV_ARGS[@]}" "$IMAGE_NAME" "${keepalive_cmd[@]}" || { cleanup; return 1; }
+    ensure_container_earlyoom "$HEAD_IP" "true" || { cleanup; return 1; }
 
     # Start Worker Nodes
     for worker in "${PEER_NODES[@]}"; do
@@ -1466,7 +1583,10 @@ start_cluster() {
             ssh "$worker" "mkdir -p ${CACHE_DIRS_TO_CREATE[*]}"
         fi
         local docker_run_cmd="docker run $docker_caps_args $docker_resource_args $(get_env_flags "$worker") $docker_args_common"
-        ssh "$worker" "$docker_run_cmd $keepalive_cmd"
+        local remote_launch_args
+        printf -v remote_launch_args '%q ' "${CONTAINER_ENV_ARGS[@]}" "$IMAGE_NAME" "${keepalive_cmd[@]}"
+        ssh "$worker" "$docker_run_cmd $remote_launch_args" || { cleanup; return 1; }
+        ensure_container_earlyoom "$worker" "false" || { cleanup; return 1; }
     done
 
     # Apply mods (containers are idle — no mod_done sync needed)
